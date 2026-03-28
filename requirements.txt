@@ -1,0 +1,72 @@
+# ============================================================
+# QuantAgent-RL — Requirements
+# ============================================================
+# GPU-accelerated packages (RAPIDS) require a CUDA-capable GPU.
+# Install via conda for best compatibility:
+#   conda install -c rapidsai -c conda-forge -c nvidia \
+#       cudf=24.12 cuml=24.12 python=3.11 cuda-version=12.0
+#
+# All RAPIDS packages fall back gracefully to pandas/scikit-learn
+# when a GPU is not available — see data/features.py.
+# ============================================================
+
+# --- Core Data & Numerics ---
+numpy>=1.26
+pandas>=2.2
+scipy>=1.13
+
+# --- Market Data ---
+yfinance>=0.2.50
+
+# --- Macro Data (FRED) ---
+fredapi>=0.5.2
+
+# --- SEC Filings (free EDGAR REST API — no subscription needed) ---
+# edgartools wraps the SEC EDGAR REST API with a clean Python interface.
+# Raw EDGAR REST API (data.sec.gov) is used directly for XBRL financials.
+edgartools>=2.20          # pip install edgartools
+beautifulsoup4>=4.12      # HTML parsing fallback for raw filing text
+lxml>=5.2
+
+# --- HTTP ---
+requests>=2.32
+httpx>=0.27
+
+# --- GPU Acceleration (RAPIDS — install via conda, not pip) ---
+# cudf-cu12
+# cuml-cu12
+# cupy-cuda12x
+
+# --- ML / Feature Engineering ---
+scikit-learn>=1.5
+statsmodels>=0.14        # GARCH baseline, OLS factor models
+arch>=7.0                # GARCH(1,1) volatility forecasting
+
+# --- Reinforcement Learning ---
+gymnasium>=0.29
+stable-baselines3>=2.3
+torch>=2.3               # Install with CUDA: pip install torch --index-url https://download.pytorch.org/whl/cu121
+
+# --- LLM / Agents ---
+anthropic>=0.34
+langchain>=0.3
+langchain-anthropic>=0.3
+langgraph>=0.2
+
+# --- Backtesting ---
+vectorbt>=0.26
+
+# --- Utilities ---
+pydantic>=2.8
+python-dotenv>=1.0
+loguru>=0.7
+tqdm>=4.66
+joblib>=1.4
+
+# --- Dev / Notebook ---
+jupyter>=1.1
+ipykernel>=6.29
+matplotlib>=3.9
+seaborn>=0.13
+plotly>=5.22
+streamlit>=1.38
