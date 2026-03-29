@@ -97,7 +97,7 @@ class MarketDataIngester:
         tickers: list[str],
         start_date: str,
         end_date: str | None = None,
-        cache_dir: str = "data/cache/market",
+        cache_dir: str = "../data/cache/market",
         batch_size: int = 50,
         retry_delay: float = 2.0,
     ) -> None:
@@ -313,7 +313,7 @@ class MacroDataIngester:
         start_date: str,
         end_date: str | None = None,
         api_key: str | None = None,
-        cache_dir: str = "data/cache/macro",
+        cache_dir: str = "../data/cache/macro",
         ffill_limit: int = 7,
     ) -> None:
         self.series_map = series_map
@@ -518,7 +518,7 @@ class SECFilingIngester:
         start_date: str,
         end_date: str | None = None,
         max_filings_per_ticker: int = 8,
-        cache_dir: str = "data/cache/sec",
+        cache_dir: str = "../data/cache/sec",
         fetch_xbrl: bool = True,
         fetch_mda: bool = True,
     ) -> None:

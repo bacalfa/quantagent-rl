@@ -39,8 +39,10 @@ httpx>=0.27
 
 # --- ML / Feature Engineering ---
 scikit-learn>=1.5
-statsmodels>=0.14        # GARCH baseline, OLS factor models
-arch>=7.0                # GARCH(1,1) volatility forecasting
+statsmodels>=0.14        # OLS factor model baseline
+arch>=7.0                # GARCH(1,1) volatility forecasting (Kevin Sheppard)
+hmmlearn>=0.3.3          # Gaussian HMM regime detection
+# cupy-cuda12x            # GPU acceleration (optional — install matching CUDA version)
 
 # --- Reinforcement Learning ---
 gymnasium>=0.29

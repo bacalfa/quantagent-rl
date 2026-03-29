@@ -151,6 +151,8 @@ class DataPipeline:
         Master configuration object.
     log_level : int
         Python logging level for pipeline messages.
+    cache_root_dir : str
+        Root directory for all cached data (market, macro, SEC).
 
     Examples
     --------
@@ -164,8 +166,10 @@ class DataPipeline:
         self,
         config: DataConfig,
         log_level: int = logging.INFO,
+        cache_root_dir: str = "../data/cache",
     ) -> None:
         self.cfg = config
+        self.cache_root_dir = cache_root_dir
         logging.basicConfig(
             level=log_level,
             format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
@@ -299,7 +303,7 @@ class DataPipeline:
             tickers=self.cfg.universe.tickers + [self.cfg.universe.benchmark_ticker],
             start_date=self.cfg.dates.start_date,
             end_date=self.cfg.dates.end_date,
-            cache_dir="data/cache/market",
+            cache_dir=self.cache_root_dir + "/market",
         )
         self._prices, self._dividends, self._volumes = ingester.fetch(
             use_cache=use_cache, force_refresh=force_refresh
@@ -317,7 +321,7 @@ class DataPipeline:
             start_date=self.cfg.dates.start_date,
             end_date=self.cfg.dates.end_date,
             api_key=self.cfg.macro.api_key,
-            cache_dir="data/cache/macro",
+            cache_dir=self.cache_root_dir + "/macro",
             ffill_limit=self.cfg.macro.ffill_limit,
         )
         self._macro = ingester.fetch(use_cache=use_cache, force_refresh=force_refresh)
@@ -331,7 +335,7 @@ class DataPipeline:
         ingester = SECFilingIngester(
             tickers=self.cfg.universe.tickers,
             form_types=self.cfg.sec.form_types,
-            cache_dir=self.cfg.sec.cache_dir,
+            cache_dir=self.cache_root_dir + "/sec",
             user_agent=self.cfg.sec.user_agent,
             start_date=self.cfg.dates.start_date,
             end_date=self.cfg.dates.end_date,
