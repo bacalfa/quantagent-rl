@@ -55,11 +55,21 @@ langchain>=0.3
 langchain-anthropic>=0.3
 langgraph>=0.2
 
+# --- Local LLM backend (HuggingFace) ---
+# All packages below are required only when llm_backend='huggingface'.
+transformers>=4.46         # model loading, tokenization, chat templates
+accelerate>=0.34           # device_map='auto' multi-GPU sharding
+bitsandbytes>=0.43       # 4-bit / 8-bit quantization (optional, Linux + CUDA only)
+# flash-attn>=2.6          # FlashAttention-2 (optional, Ampere+ GPU, compile from source)
+
+# --- Sentence Embedding (GPU-accelerated via PyTorch CUDA) ---
+sentence-transformers>=3.0   # GPU inference when torch CUDA-enabled; TF-IDF fallback if absent
+
 # --- Backtesting ---
 vectorbt>=0.26
 
 # --- Utilities ---
-pydantic>=2.8
+pydantic>=2.8           # optional — schemas use pure dataclasses with __post_init__ validation
 python-dotenv>=1.0
 loguru>=0.7
 tqdm>=4.66

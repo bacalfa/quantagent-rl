@@ -145,7 +145,7 @@ class FamaFrenchConfig:
     n_factors: int = 3
     rolling_window: int = 63
     min_obs_fraction: float = 0.8
-    cache_dir: str = "data/cache/ff_factors"
+    cache_dir: str = "../data/cache/ff_factors"
     use_gpu: bool | None = None
     annualize_alpha: bool = True
 

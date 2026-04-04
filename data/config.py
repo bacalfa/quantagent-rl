@@ -8,8 +8,6 @@ hyperparameters, and GPU preferences — are centralised here so that
 experiments can be reproduced by changing a single config object.
 """
 
-from __future__ import annotations
-
 import os
 from dataclasses import dataclass, field
 from typing import List, Optional
@@ -179,7 +177,7 @@ class SECConfig:
     """
 
     form_types: List[str] = field(default_factory=lambda: ["10-Q", "10-K"])
-    cache_dir: str = "data/cache/sec"
+    cache_dir: str = "../data/cache/sec"
     user_agent: str = field(
         default_factory=lambda: os.environ.get(
             "SEC_USER_AGENT", "QuantAgentRL research@example.com"

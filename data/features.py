@@ -17,8 +17,6 @@ Features computed:
   - Macro-aligned features : lagged macro signal alignment per asset
 """
 
-from __future__ import annotations
-
 import logging
 
 import numpy as np

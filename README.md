@@ -11,8 +11,8 @@ A production-grade, end-to-end system that combines GPU-accelerated quantitative
 ```
 quantagent-rl/
 ├── data/           # GPU-accelerated ingestion & feature engineering
+├── forecasting/    # GARCH volatility, HMM regime detection, factor models
 ├── agents/         # (TODO) LangGraph multi-agent LLM system
-├── forecasting/    # (TODO) GARCH volatility, HMM regime detection, factor models
 ├── rl/             # (TODO) Gymnasium environment, PPO agent, differential Sharpe reward
 ├── tax/            # (TODO) Lot-level cost basis tracker, tax cost calculator
 ├── backtest/       # (TODO) Walk-forward engine, performance metrics

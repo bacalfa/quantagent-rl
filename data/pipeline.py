@@ -28,8 +28,6 @@ Usage
 >>> fold.sec_metadata          # SEC filing metadata DataFrame
 """
 
-from __future__ import annotations
-
 import logging
 from dataclasses import dataclass, field
 

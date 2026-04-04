@@ -23,8 +23,6 @@ pandas DataFrame. Caching is handled via parquet/JSON files to avoid
 redundant API calls during development.
 """
 
-from __future__ import annotations
-
 import logging
 import os
 import time
@@ -903,13 +901,17 @@ class SECFilingIngester:
 
             # Most recent eligible filing
             filing = sorted(filing_list, key=lambda f: f.filing_date, reverse=True)[0]
-            doc = filing.primary_document()
+            # doc = filing.primary_document()
+            doc = filing.document
             if doc is None:
                 return ""
 
             # edgartools exposes an MDA property on 10-Q/10-K objects
             tenq = filing.obj()
             mda_text = getattr(tenq, "mda", None)
+            if mda_text:
+                return str(mda_text)[:max_chars]
+            mda_text = tenq["Part I, Item 2"]
             if mda_text:
                 return str(mda_text)[:max_chars]
 
@@ -1028,3 +1030,147 @@ class SECFilingIngester:
                 break
 
         return text[mda_start:mda_end][:max_chars]
+
+    @staticmethod
+    def read_filing_text(file_path: str, max_chars: int = 40_000) -> str:
+        """Return clean text from a filing, given a local path or an EDGAR URL.
+
+        This method is the single read interface used by
+        ``agents.pipeline.AgentPipeline._load_mda_data``.  It handles three
+        possible values of ``file_path`` that can appear in the SEC metadata
+        DataFrame:
+
+        1. **Local filesystem path** — produced when filings were previously
+           downloaded to disk (e.g., via the old ``sec-edgar-downloader`` path
+           or a manual cache). The file is opened and parsed with
+           ``BeautifulSoup``.
+
+        2. **EDGAR document URL** (``https://www.sec.gov/Archives/…``) —
+           produced by the current ``SECFilingIngester`` which stores the
+           ``primary_document_url`` from the EDGAR submissions API.  The
+           document is fetched over HTTP and parsed.
+
+        3. **Empty string or None** — returns an empty string immediately so
+           that the calling agent gracefully handles missing data.
+
+        In both read paths the raw HTML/text is cleaned with
+        ``BeautifulSoup``, script and style tags are stripped, whitespace is
+        normalised, and the result is truncated to ``max_chars`` before being
+        returned.  No MD&A heuristic is applied here — that extraction is
+        handled by ``_extract_mda_heuristic`` inside the agent layer so that
+        callers that want the full document text (e.g., for future 8-K
+        support) are not penalized.
+
+        Parameters
+        ----------
+        file_path : str
+            Local filesystem path **or** full HTTPS URL to the filing
+            document.  The value comes directly from
+            ``sec_metadata["file_path"]`` or
+            ``sec_metadata["primary_document_url"]``.
+        max_chars : int
+            Maximum characters to return.  Keeps the result within Claude's
+            context window budget.  Default: 40 000.
+
+        Returns
+        -------
+        str
+            Cleaned plain-text content of the filing, truncated to
+            ``max_chars``.  Returns an empty string on any failure so the
+            caller can proceed with empty context rather than crashing.
+        """
+        if not file_path:
+            return ""
+
+        import re as _re
+
+        raw_bytes: bytes | None = None
+
+        # ----------------------------------------------------------------
+        # Path 1 — local file
+        # ----------------------------------------------------------------
+        from pathlib import Path as _Path
+
+        local = _Path(file_path)
+        if local.exists() and local.is_file():
+            try:
+                # Read more than max_chars so the HTML parser has enough
+                # context to find the body before we truncate the plain text.
+                with open(local, "rb") as fh:
+                    raw_bytes = fh.read(max_chars * 8)
+            except OSError as exc:
+                logger.warning(f"[SEC:read_filing_text] Cannot open {file_path}: {exc}")
+                return ""
+
+        # ----------------------------------------------------------------
+        # Path 2 — EDGAR URL
+        # ----------------------------------------------------------------
+        elif file_path.startswith("http"):
+            try:
+                import requests
+
+                resp = requests.get(
+                    file_path,
+                    headers={
+                        "User-Agent": os.environ.get(
+                            "SEC_USER_AGENT", "QuantAgentRL research@example.com"
+                        )
+                    },
+                    timeout=30,
+                    stream=True,
+                )
+                resp.raise_for_status()
+                # Stream at most max_chars * 8 bytes to avoid downloading
+                # entire 10-K documents that can exceed 10 MB.
+                chunks: list[bytes] = []
+                total = 0
+                for chunk in resp.iter_content(chunk_size=65_536):
+                    chunks.append(chunk)
+                    total += len(chunk)
+                    if total >= max_chars * 8:
+                        break
+                raw_bytes = b"".join(chunks)
+                time.sleep(_SEC_RATE_LIMIT_DELAY)
+            except Exception as exc:
+                logger.warning(
+                    f"[SEC:read_filing_text] HTTP fetch failed for {file_path}: {exc}"
+                )
+                return ""
+
+        else:
+            # Neither a valid local path nor a URL
+            logger.debug(
+                f"[SEC:read_filing_text] Unrecognised file_path format: {file_path!r}"
+            )
+            return ""
+
+        if not raw_bytes:
+            return ""
+
+        # ----------------------------------------------------------------
+        # Parse and clean with BeautifulSoup
+        # ----------------------------------------------------------------
+        try:
+            from bs4 import BeautifulSoup
+
+            soup = BeautifulSoup(raw_bytes, "lxml")
+        except Exception:
+            try:
+                from bs4 import BeautifulSoup
+
+                soup = BeautifulSoup(raw_bytes, "html.parser")
+            except Exception as exc:
+                logger.warning(f"[SEC:read_filing_text] HTML parse failed: {exc}")
+                # Last resort: decode raw bytes directly
+                text = raw_bytes.decode("utf-8", errors="replace")
+                return " ".join(text.split())[:max_chars]
+
+        # Remove non-content tags
+        for tag in soup(["script", "style", "ix:header", "ix:hidden"]):
+            tag.decompose()
+
+        text = soup.get_text(separator=" ", strip=True)
+        # Collapse runs of whitespace to single spaces
+        text = _re.sub(r"\s+", " ", text).strip()
+
+        return text[:max_chars]

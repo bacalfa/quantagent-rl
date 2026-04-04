@@ -122,7 +122,7 @@ class FamaFrenchDataLoader:
     """
 
     def __init__(
-        self, n_factors: int = 3, cache_dir: str = "data/cache/ff_factors"
+        self, n_factors: int = 3, cache_dir: str = "../data/cache/ff_factors"
     ) -> None:
         if n_factors not in (3, 5):
             raise ValueError("n_factors must be 3 or 5.")
