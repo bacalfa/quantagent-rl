@@ -32,6 +32,7 @@ from dataclasses import dataclass
 from functools import lru_cache
 
 import requests
+from ddgs import DDGS
 
 logger = logging.getLogger(__name__)
 
@@ -168,33 +169,60 @@ def _web_search_anthropic(
 def _web_search_ddg(query: str, max_results: int) -> list[dict]:
     """Lightweight DuckDuckGo instant-answer fallback (no API key needed)."""
     try:
-        url = "https://api.duckduckgo.com/"
-        params = {"q": query, "format": "json", "no_redirect": "1", "no_html": "1"}
-        resp = requests.get(url, params=params, timeout=10)
-        resp.raise_for_status()
-        data = resp.json()
+        # url = "https://api.duckduckgo.com/"
+        # params = {"q": query, "format": "json", "no_redirect": "1", "no_html": "1"}
+        # proxies = {
+        #     "http": os.environ.get("HTTP_PROXY", ""),
+        #     "https": os.environ.get("HTTPS_PROXY", ""),
+        # }
+        # headers = {
+        #     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+        # }
+        # verify = os.environ.get("REQUESTS_CA_BUNDLE", False)
+        # resp = requests.get(
+        #     url,
+        #     params=params,
+        #     proxies=proxies,
+        #     headers=headers,
+        #     verify=verify,
+        #     timeout=10,
+        # )
+        # resp.raise_for_status()
+        # data = resp.json()
 
+        # results = []
+        # # Abstract answer
+        # if data.get("AbstractText"):
+        #     results.append(
+        #         {
+        #             "title": data.get("Heading", query),
+        #             "snippet": data["AbstractText"],
+        #             "url": data.get("AbstractURL", ""),
+        #         }
+        #     )
+        # # Related topics
+        # for topic in data.get("RelatedTopics", [])[: max_results - len(results)]:
+        #     if isinstance(topic, dict) and topic.get("Text"):
+        #         results.append(
+        #             {
+        #                 "title": topic.get("Text", "")[:80],
+        #                 "snippet": topic.get("Text", ""),
+        #                 "url": topic.get("FirstURL", ""),
+        #             }
+        #         )
+        # return results[:max_results]
+
+        responses = DDGS().text(query, max_results=max_results)
         results = []
-        # Abstract answer
-        if data.get("AbstractText"):
+        for r in responses:
             results.append(
                 {
-                    "title": data.get("Heading", query),
-                    "snippet": data["AbstractText"],
-                    "url": data.get("AbstractURL", ""),
+                    "title": r["title"],
+                    "url": r["href"],
+                    "text": r["body"],
                 }
             )
-        # Related topics
-        for topic in data.get("RelatedTopics", [])[: max_results - len(results)]:
-            if isinstance(topic, dict) and topic.get("Text"):
-                results.append(
-                    {
-                        "title": topic.get("Text", "")[:80],
-                        "snippet": topic.get("Text", ""),
-                        "url": topic.get("FirstURL", ""),
-                    }
-                )
-        return results[:max_results]
+        return results
     except Exception as exc:
         logger.warning(f"[Tools] DuckDuckGo fallback failed: {exc}")
         return []

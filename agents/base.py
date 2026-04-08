@@ -147,6 +147,12 @@ class BaseAgent(ABC):
         -------
         dict
         """
+        raw = raw.strip().replace("\n", "")
+        if raw[0] != "{":
+            raw = "{" + raw
+        if raw[-1] != "}":
+            raw += "}"
+
         # Strategy 1 — direct parse
         try:
             return json.loads(raw.strip())

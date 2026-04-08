@@ -50,6 +50,18 @@ Usage
 >>> text = client.complete("You are a finance expert.", "What is the yield curve?")
 """
 
+import bitsandbytes as bnb
+
+original_new = bnb.nn.Int8Params.__new__
+
+
+def patched_new(cls, data=None, requires_grad=False, has_fp16_weights=False, **kwargs):
+    kwargs.pop("_is_hf_initialized", None)
+    return original_new(cls, data, requires_grad, has_fp16_weights, **kwargs)
+
+
+bnb.nn.Int8Params.__new__ = patched_new
+
 import logging
 import time
 from abc import ABC, abstractmethod
@@ -283,6 +295,10 @@ class HuggingFaceLLMClient(BaseLLMClient):
         Attention backend.  ``"flash_attention_2"`` gives a 2–4× speedup on
         Ampere (A100, RTX 30/40-series) and later GPUs but requires the
         ``flash-attn`` package.  ``None`` uses the model's default.
+    llm_int8_enable_fp32_cpu_offload: bool
+        This allows the library to keep offloaded modules in their original
+        32-bit (FP32) precision, as the bitsandbytes 8-bit kernels are currently
+        optimized for GPU execution only.
     """
 
     def __init__(
@@ -297,6 +313,7 @@ class HuggingFaceLLMClient(BaseLLMClient):
         trust_remote_code: bool = True,
         cache_dir: str | None = None,
         attn_implementation: str | None = None,
+        llm_int8_enable_fp32_cpu_offload: bool = False,
     ) -> None:
         super().__init__(temperature=temperature, max_tokens=max_new_tokens)
         self.model_name = model_name
@@ -308,6 +325,7 @@ class HuggingFaceLLMClient(BaseLLMClient):
         self.trust_remote_code = trust_remote_code
         self.cache_dir = cache_dir
         self.attn_implementation = attn_implementation
+        self.llm_int8_enable_fp32_cpu_offload = llm_int8_enable_fp32_cpu_offload
 
         # Populated on first call
         self._model = None
@@ -385,9 +403,13 @@ class HuggingFaceLLMClient(BaseLLMClient):
                     bnb_4bit_compute_dtype=torch_dtype,
                     bnb_4bit_use_double_quant=True,  # nested quantization
                     bnb_4bit_quant_type="nf4",  # NormalFloat4
+                    llm_int8_enable_fp32_cpu_offload=self.llm_int8_enable_fp32_cpu_offload,
                 )
             else:
-                quantization_config = BitsAndBytesConfig(load_in_8bit=True)
+                quantization_config = BitsAndBytesConfig(
+                    load_in_8bit=True,
+                    llm_int8_enable_fp32_cpu_offload=self.llm_int8_enable_fp32_cpu_offload,
+                )
 
         # ── Model kwargs ─────────────────────────────────────────────
         model_kwargs: dict = {
@@ -615,6 +637,7 @@ def build_llm_client(config: object) -> BaseLLMClient:
             trust_remote_code=hf_cfg.trust_remote_code,
             cache_dir=hf_cfg.cache_dir,
             attn_implementation=hf_cfg.attn_implementation,
+            llm_int8_enable_fp32_cpu_offload=hf_cfg.llm_int8_enable_fp32_cpu_offload,
         )
 
     raise ValueError(

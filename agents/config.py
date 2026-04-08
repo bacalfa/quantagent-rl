@@ -26,13 +26,14 @@ DEFAULT_HF_MODEL = os.environ.get("HUGGINGFACE_MODEL", "microsoft/phi-4")
 # System prompts
 # ---------------------------------------------------------------------------
 
-MACRO_SYSTEM_PROMPT = """\
-You are a senior macro-economic analyst supporting a quantitative portfolio \
-manager. Your task is to assess the current macro-economic environment using \
+MACRO_SYSTEM_PROMPT = """
+You are a senior macro-economic analyst supporting a quantitative portfolio 
+manager. Your task is to assess the current macro-economic environment using 
 the provided quantitative indicators and recent news.
  
-You must respond ONLY with a valid JSON object — no markdown fences, no prose \
-before or after. The JSON must match this schema exactly:
+**CRITICAL**: You must strictly respond ONLY with a valid JSON object — no markdown 
+fences, no prose before or after, no <think> tokens, no preamble, no postscript. 
+The JSON **MUST** match this schema exactly (you **MUST NOT** include newline character '\n' in your response):
  
 {
   "rate_environment": "<one of: tightening | neutral | easing>",
@@ -46,17 +47,18 @@ before or after. The JSON must match this schema exactly:
   "analyst_summary": "<two to three sentence narrative summary>"
 }
  
-Base your assessment strictly on information available as of the as_of_date \
+Base your assessment strictly on information available as of the as_of_date 
 provided. Do not reference events after that date.
 """
 
-SECTOR_SYSTEM_PROMPT = """\
-You are a senior equity sector analyst. Your task is to assess the near-term \
-outlook for a specific GICS sector based on recent earnings commentary, \
+SECTOR_SYSTEM_PROMPT = """
+You are a senior equity sector analyst. Your task is to assess the near-term 
+outlook for a specific GICS sector based on recent earnings commentary, 
 analyst coverage, and macro context.
  
-You must respond ONLY with a valid JSON object — no markdown fences, no prose. \
-The JSON must match this schema exactly:
+**CRITICAL**: You must strictly respond ONLY with a valid JSON object — no markdown 
+fences, no prose before or after, no <think> tokens, no preamble, no postscript.
+The JSON **MUST** match this schema exactly (you **MUST NOT** include newline character '\n' in your response):
  
 {
   "sector": "<GICS sector name>",
@@ -68,18 +70,19 @@ The JSON must match this schema exactly:
   "analyst_summary": "<two to three sentence narrative summary>"
 }
  
-Base your assessment strictly on information available as of the as_of_date \
+Base your assessment strictly on information available as of the as_of_date 
 provided. Do not reference events after that date.
 """
 
-COMPANY_SYSTEM_PROMPT = """\
-You are a fundamental equity analyst. Your task is to assess a single stock \
-using its most recent SEC filing financials (structured XBRL data) and the \
-Management Discussion and Analysis (MD&A) section of its most recent quarterly \
+COMPANY_SYSTEM_PROMPT = """
+You are a fundamental equity analyst. Your task is to assess a single stock 
+using its most recent SEC filing financials (structured XBRL data) and the 
+Management Discussion and Analysis (MD&A) section of its most recent quarterly 
 or annual report.
  
-You must respond ONLY with a valid JSON object — no markdown fences, no prose. \
-The JSON must match this schema exactly:
+**CRITICAL**: You must strictly respond ONLY with a valid JSON object — no markdown 
+fences, no prose before or after, no <think> tokens, no preamble, no postscript. 
+The JSON **MUST** match this schema exactly (you **MUST NOT** include newline character '\n' in your response):
  
 {
   "ticker": "<ticker symbol>",
@@ -93,18 +96,19 @@ The JSON must match this schema exactly:
   "analyst_summary": "<two to three sentence narrative summary>"
 }
  
-Base your assessment strictly on the provided data. Do not fabricate financial \
+Base your assessment strictly on the provided data. Do not fabricate financial 
 figures. If data is insufficient, note that in the analyst_summary.
 """
 
-ORCHESTRATOR_SYSTEM_PROMPT = """\
-You are the chief investment strategist for a quantitative equity fund. You \
-receive structured analyses from three specialist agents — a macro analyst, \
-sector analysts, and company analysts — and must synthesize them into a unified \
+ORCHESTRATOR_SYSTEM_PROMPT = """
+You are the chief investment strategist for a quantitative equity fund. You 
+receive structured analyses from three specialist agents — a macro analyst, 
+sector analysts, and company analysts — and must synthesize them into a unified 
 market brief that will guide portfolio rebalancing decisions.
  
-You must respond ONLY with a valid JSON object — no markdown fences, no prose. \
-The JSON must match this schema exactly:
+**CRITICAL**: You must strictly respond ONLY with a valid JSON object — no markdown 
+fences, no prose before or after, no <think> tokens, no preamble, no postscript. 
+The JSON **MUST** match this schema exactly (you **MUST NOT** include newline character \n in your response):
  
 {
   "as_of_date": "<YYYY-MM-DD>",
@@ -119,8 +123,8 @@ The JSON must match this schema exactly:
   "executive_summary": "<three to five sentence investment narrative>"
 }
  
-Reconcile any contradictions between the sub-analyses using sound investment \
-judgment. Weight macro signals more heavily during high-uncertainty regimes \
+Reconcile any contradictions between the sub-analyses using sound investment 
+judgment. Weight macro signals more heavily during high-uncertainty regimes 
 (high VIX, inverted yield curve, elevated HY spreads).
 """
 
@@ -168,6 +172,10 @@ class HuggingFaceConfig:
         Attention backend. Use ``'flash_attention_2'`` for 2–4× speedup on
         Ampere and later GPUs. Requires: pip install flash-attn.
         None = model default (scaled dot-product attention).
+    llm_int8_enable_fp32_cpu_offload: bool
+        This allows the library to keep offloaded modules in their original
+        32-bit (FP32) precision, as the bitsandbytes 8-bit kernels are currently
+        optimized for GPU execution only.
     """
 
     model_name: str = DEFAULT_HF_MODEL
@@ -179,6 +187,7 @@ class HuggingFaceConfig:
     trust_remote_code: bool = True
     cache_dir: str | None = None
     attn_implementation: str | None = None
+    llm_int8_enable_fp32_cpu_offload: bool = False
 
     def __post_init__(self) -> None:
         if self.load_in_4bit and self.load_in_8bit:

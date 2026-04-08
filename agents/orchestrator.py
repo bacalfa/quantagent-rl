@@ -484,9 +484,10 @@ def build_agent_graph(config: AgentConfig) -> object:
 
         # START fans out to macro and sector simultaneously
         graph.add_edge(START, "macro_node")
-        graph.add_edge(START, "sector_node")
-        # Both must finish before company node starts
-        graph.add_edge("macro_node", "company_node")
+        # graph.add_edge(START, "sector_node")
+        # # Both must finish before company node starts
+        # graph.add_edge("macro_node", "company_node")
+        graph.add_edge("macro_node", "sector_node")
         graph.add_edge("sector_node", "company_node")
         graph.add_edge("company_node", "orchestrator_node")
         graph.add_edge("orchestrator_node", END)
