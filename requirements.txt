@@ -45,8 +45,8 @@ hmmlearn>=0.3.3          # Gaussian HMM regime detection
 # cupy-cuda12x            # GPU acceleration (optional — install matching CUDA version)
 
 # --- Reinforcement Learning ---
-gymnasium>=0.29
-stable-baselines3>=2.3
+gymnasium>=0.29          # custom PortfolioEnv; graceful stub if absent
+stable-baselines3>=2.3   # PPO agent; GPU-accelerated via PyTorch CUDA
 torch>=2.3               # Install with CUDA: pip install torch --index-url https://download.pytorch.org/whl/cu121
 
 # --- LLM / Agents ---

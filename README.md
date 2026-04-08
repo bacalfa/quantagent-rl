@@ -12,9 +12,8 @@ A production-grade, end-to-end system that combines GPU-accelerated quantitative
 quantagent-rl/
 ├── data/           # GPU-accelerated ingestion & feature engineering
 ├── forecasting/    # GARCH volatility, HMM regime detection, factor models
-├── agents/         # (TODO) LangGraph multi-agent LLM system
-├── rl/             # (TODO) Gymnasium environment, PPO agent, differential Sharpe reward
-├── tax/            # (TODO) Lot-level cost basis tracker, tax cost calculator
+├── agents/         # LangGraph multi-agent LLM system
+├── rl/             # Gymnasium environment, PPO agent, differential Sharpe reward
 ├── backtest/       # (TODO) Walk-forward engine, performance metrics
 └── demo/           # (TODO) Streamlit dashboard
 ```
@@ -45,8 +44,7 @@ Every data processing stage uses RAPIDS cuDF/cuML when a GPU is available, with 
 | `data` | Market data (yfinance), macro signals (FRED), SEC filings ingestion + GPU feature engineering |
 | `agents` | LangGraph multi-agent: Macro, Sector, Company, and Orchestrator agents |
 | `forecasting` | GARCH(1,1) volatility, HMM regime detection, Fama-French factor exposures |
-| `rl` | Custom Gymnasium environment, PPO via Stable-Baselines3, differential Sharpe reward |
-| `tax` | FIFO lot tracker, short/long-term capital gains, tax-loss harvesting calculator |
+| `rl` | Custom Gymnasium environment (including FIFO lot tracker, short/long-term capital gains, tax-loss harvesting calculator),<br> PPO via Stable-Baselines3, differential Sharpe reward |
 | `backtest` | Walk-forward engine, Sharpe, Sortino, max drawdown, turnover, tax drag metrics |
 
 ---
@@ -67,22 +65,61 @@ Every data processing stage uses RAPIDS cuDF/cuML when a GPU is available, with 
 | Layer | NVIDIA Technology |
 |-------|------------------|
 | Feature engineering | cuDF, cuML |
-| Volatility forecasting | CuPy-accelerated GARCH |
-| RL training | PyTorch (CUDA) via Stable-Baselines3 |
+| Volatility forecasting | CuPy-accelerated GARCH batch recursion |
+| HMM regime decoding | CuPy Viterbi + log-emission computation |
+| Factor model (rolling OLS) | CuPy batched einsum + linalg.solve |
+| Reward computation | CuPy differential Sharpe EMA loop |
+| RL policy + value networks | PyTorch CUDA via Stable-Baselines3 |
+| MarketBrief embedding | PyTorch CUDA via sentence-transformers |
 | Backtesting | vectorbt with CUDA support |
 
 ---
 
 ## Setup
 
-```bash
-pip install -r requirements.txt
+1. Clone the repository
+
+```shell
+git clone git@github.com:bacalfa/quantagent-rl.git
+cd quantagent-rl
 ```
 
-Set environment variables:
-```bash
-export FRED_API_KEY="your_fred_api_key"         # https://fred.stlouisfed.org/docs/api/api_key.html
-export ANTHROPIC_API_KEY="your_anthropic_key"   # https://console.anthropic.com
+2. Create virtual or a conda environment (example using `uv`)
+
+```shell
+uv venv
+source .venv/bin/activate  # On Windows: .venv\Scripts\activate
+```
+
+3. Install dependencies (example using `uv`)
+
+```shell
+uv sync
+```
+
+4. Create file `.env` in top folder and containing the following text (replace API keys with yours)
+
+```
+# Create file called .env and add your actual API keys
+
+# Required: Your Anthropic API key from https://console.anthropic.com/
+ANTHROPIC_API_KEY=sk-*********************************************************************************************************
+
+# LLM selection
+ANTHROPIC_MODEL=claude-sonnet-4-6
+HUGGINGFACE_MODEL=mistralai/mistral-7B-instruct-v0.3
+
+# Embedding model selection (sentence-transformers)
+EMBEDDING_MODEL=all-MiniLM-L6-v2
+
+# FRED API Key from https://fred.stlouisfed.org/docs/api/api_key.html
+FRED_API_KEY=********************************
+
+# EDGAR User Agent
+SEC_USER_AGENT=First Name Last Name username@email.com
+
+# HuggingFace user access token
+HF_TOKEN=hf_**********************************
 ```
 
 ---
