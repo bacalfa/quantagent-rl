@@ -43,7 +43,7 @@ from rl.config import (
     RLConfig,
     WalkForwardConfig,
 )
-from rl.env import Lot, LotTracker, PortfolioEnv
+from rl.env import _HAS_GYMNASIUM, Lot, LotTracker, PortfolioEnv
 from rl.pipeline import FoldMetrics, RLFoldResult, RLPipeline
 from rl.reward import DifferentialSharpeState, RewardCalculator
 from rl.state import StateBuilder
@@ -60,6 +60,7 @@ __all__ = [
     "PPOConfig",
     "WalkForwardConfig",
     # Environment
+    "_HAS_GYMNASIUM",
     "PortfolioEnv",
     "LotTracker",
     "Lot",

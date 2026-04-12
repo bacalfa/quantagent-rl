@@ -33,16 +33,16 @@ requests>=2.32
 httpx>=0.27
 
 # --- GPU Acceleration (RAPIDS — install via conda, not pip) ---
-# cudf-cu12
-# cuml-cu12
-# cupy-cuda12x
+cudf-cu12
+cuml-cu12
+cupy-cuda12x
 
 # --- ML / Feature Engineering ---
 scikit-learn>=1.5
 statsmodels>=0.14        # OLS factor model baseline
 arch>=7.0                # GARCH(1,1) volatility forecasting (Kevin Sheppard)
 hmmlearn>=0.3.3          # Gaussian HMM regime detection
-# cupy-cuda12x            # GPU acceleration (optional — install matching CUDA version)
+cupy-cuda12x            # GPU acceleration (optional — install matching CUDA version)
 
 # --- Reinforcement Learning ---
 gymnasium>=0.29          # custom PortfolioEnv; graceful stub if absent
