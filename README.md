@@ -14,7 +14,7 @@ quantagent-rl/
 ├── forecasting/    # GARCH volatility, HMM regime detection, factor models
 ├── agents/         # LangGraph multi-agent LLM system
 ├── rl/             # Gymnasium environment, PPO agent, differential Sharpe reward
-├── backtest/       # (TODO) Walk-forward engine, performance metrics
+├── backtest/       # Walk-forward engine, performance metrics
 └── demo/           # (TODO) Streamlit dashboard
 ```
 
