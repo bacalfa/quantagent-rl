@@ -555,7 +555,10 @@ class MetricsCalculator:
             start = t - W + 1
             window = rv[start : t + 1]
             cum = xp.cumprod(xp.float64(1.0) + window)
-            peak = xp.maximum.accumulate(cum)
+            # peak = xp.maximum.accumulate(cum)  # <-- not yet supported
+            h_array = xp.asnumpy(cum)
+            result = np.maximum.accumulate(h_array)
+            peak = xp.array(result)
             dd = (cum - peak) / (peak + xp.float64(1e-10))
             out[t] = xp.min(dd)
 

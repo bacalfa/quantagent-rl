@@ -27,6 +27,7 @@ fredapi>=0.5.2
 edgartools>=2.20          # pip install edgartools
 beautifulsoup4>=4.12      # HTML parsing fallback for raw filing text
 lxml>=5.2
+ddgs>=9.13
 
 # --- HTTP ---
 requests>=2.32
