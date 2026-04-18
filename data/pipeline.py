@@ -346,8 +346,12 @@ class DataPipeline:
 
     def _build_universe(self) -> None:
         logger.info("[Pipeline] Stage 4: Universe validation")
+        if self.cfg.universe.benchmark_ticker not in self.cfg.universe.tickers:
+            tickers = self.cfg.universe.tickers + [self.cfg.universe.benchmark_ticker]
+        else:
+            tickers = self.cfg.universe.tickers
         self._universe = Universe(
-            tickers=self.cfg.universe.tickers,
+            tickers=tickers,
             price_data=self._prices,
             start_date=self.cfg.dates.start_date,
             min_history_years=self.cfg.universe.min_history_years,
@@ -371,7 +375,7 @@ class DataPipeline:
     def _engineer_features(self) -> None:
         logger.info("[Pipeline] Stage 5: Feature engineering")
         benchmark_col = (
-            self._universe.benchmark_ticker
+            self.cfg.universe.benchmark_ticker
             if self.cfg.universe.benchmark_ticker in self._prices.columns
             else None
         )

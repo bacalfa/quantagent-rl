@@ -219,6 +219,10 @@ class AgentConfig:
     mock_mode : bool
         If True, all LLM calls are bypassed and deterministic stub responses
         are returned. Useful for testing, CI, and offline demos.
+    llm_backend : str
+        Which LLM backend to use: 'claude' for Anthropic API or 'huggingface' for local models.
+    huggingface : HuggingFaceConfig
+        Sub-configuration for the HuggingFace local LLM backend. Only used if llm_backend='huggingface'.
     enable_web_search : bool
         If True, macro and sector agents use the Anthropic web-search tool.
         Disable for pure backtesting runs to avoid look-ahead bias.
