@@ -275,6 +275,50 @@ def _load_last_forecast_bundle(tickers_csv: str, _dp):
     return fp.run_fold(last_fold)
 
 
+@st.cache_resource(
+    show_spinner="Training PPO agent on walk-forward folds (may take several minutes)…"
+)
+def _run_rl_pipeline(tickers_csv: str, _dp):
+    """Train RLPipeline on the last N_SHOW folds and return RLFoldResult list.
+
+    Results are cached by tickers_csv.  The ForecastingPipeline is re-created
+    internally so that each fold's RL state includes GARCH / HMM / FF features.
+
+    Parameters
+    ----------
+    tickers_csv : str
+        Comma-joined sorted tickers string — used as the cache key.
+    _dp : DataPipeline
+        Underscore-prefixed so Streamlit does not hash it.
+
+    Returns
+    -------
+    list[RLFoldResult]
+    """
+    from forecasting.config import ForecastConfig
+    from forecasting.pipeline import ForecastingPipeline
+    from rl.config import RLConfig
+    from rl.pipeline import RLPipeline
+
+    N_SHOW = min(3, _dp.n_folds)
+    ckpt_dir = str(_PROJECT_ROOT / "checkpoints" / "rl")
+
+    fp = ForecastingPipeline(ForecastConfig())
+    fp.load_factors(use_cache=True, force_refresh=True)
+
+    rl = RLPipeline(RLConfig(), checkpoint_dir=ckpt_dir)
+
+    results: list = []
+    for fi in range(_dp.n_folds - N_SHOW, _dp.n_folds):
+        fold = _dp.get_fold(fi)
+        fb = fp.run_fold(fold)
+        warm = fi > (_dp.n_folds - N_SHOW)  # warm-start after first RL fold
+        result = rl.run_fold(fold, forecast_bundle=fb, warm_start=warm)
+        results.append(result)
+
+    return results
+
+
 @st.cache_resource(show_spinner="Running agent analysis…")
 def _load_agent_bundle(tickers_csv: str, _dp):
     from agents import HuggingFaceConfig
@@ -370,12 +414,26 @@ def _fold_metrics(r: np.ndarray, bm: np.ndarray) -> dict:
     return {"total_return": cum, "sharpe": sh, "max_drawdown": dd, "alpha": alpha}
 
 
+def _rl_metrics_to_dict(m, bm_r: np.ndarray) -> dict:
+    """Convert a FoldMetrics object to the fold-metrics dict format."""
+    r = np.array(m.quarterly_returns, dtype=float)
+    n = len(r)
+    bm_aligned = bm_r[:n] if len(bm_r) >= n else np.zeros(n)
+    alpha = float((r - bm_aligned).mean() * 4) if n > 0 else 0.0
+    return {
+        "total_return": m.total_return,
+        "sharpe": m.sharpe,
+        "max_drawdown": m.max_drawdown,
+        "alpha": alpha,
+    }
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Dashboard data builder  (called once per session)
 # ─────────────────────────────────────────────────────────────────────────────
 
 
-def _build_dashboard_data(dp, last_bundle, agent_bundle) -> dict:
+def _build_dashboard_data(dp, last_bundle, agent_bundle, rl_results=None) -> dict:
     from data.universe import TICKER_SECTOR_MAP
 
     tickers = dp.universe.valid_tickers
@@ -466,23 +524,56 @@ def _build_dashboard_data(dp, last_bundle, agent_bundle) -> dict:
         all_prices_fold, last_fold.tickers, test_dates, last_fold.train_end
     )
 
+    # ── PPO returns: real if RL trained, EW proxy otherwise ─────────────────
+    if rl_results is not None and len(rl_results) > 0:
+        last_rl = rl_results[-1]
+        ppo_r = np.array(last_rl.ppo_metrics.quarterly_returns, dtype=float)
+        n_q = min(len(ppo_r), len(test_dates))
+        ppo_ret = ppo_r[:n_q]
+        test_dates = test_dates[:n_q]
+        ew_ret = ew_ret[:n_q]
+        hold_ret = hold_ret[:n_q]
+        bm_ret = bm_ret[:n_q]
+        ppo_trained = True
+    else:
+        ppo_ret = ew_ret  # EW proxy until RL is trained
+        ppo_trained = False
+
     # ── Per-fold breakdown (last 3 folds for chart) ───────────────────────────
     n_show = min(3, dp.n_folds)
     folds_data = []
-    for fi in range(dp.n_folds - n_show, dp.n_folds):
-        fi_fold = dp.get_fold(fi)
-        fi_all = pd.concat([fi_fold.train_prices, fi_fold.test_prices]).sort_index()
-        fi_ew, fi_bh, fi_bm = _compute_portfolio_returns(
-            fi_all, fi_fold.tickers, fi_fold.test_dates, fi_fold.train_end
-        )
-        folds_data.append(
-            {
-                "fold": fi,
-                "ppo": _fold_metrics(fi_ew, fi_bm),  # EW used as PPO proxy
-                "ew": _fold_metrics(fi_ew, fi_bm),
-                "bm": _fold_metrics(fi_bm, fi_bm),
-            }
-        )
+    if rl_results is not None and len(rl_results) > 0:
+        for result in rl_results:
+            fi_fold = dp.get_fold(result.fold_idx)
+            fi_all = pd.concat([fi_fold.train_prices, fi_fold.test_prices]).sort_index()
+            _, _, fi_bm = _compute_portfolio_returns(
+                fi_all, fi_fold.tickers, fi_fold.test_dates, fi_fold.train_end
+            )
+            folds_data.append(
+                {
+                    "fold": result.fold_idx,
+                    "ppo": _rl_metrics_to_dict(result.ppo_metrics, fi_bm),
+                    "ew": _rl_metrics_to_dict(result.equal_weight_metrics, fi_bm),
+                    "hold": _rl_metrics_to_dict(result.hold_metrics, fi_bm),
+                    "bm": _fold_metrics(fi_bm, fi_bm),
+                }
+            )
+    else:
+        for fi in range(dp.n_folds - n_show, dp.n_folds):
+            fi_fold = dp.get_fold(fi)
+            fi_all = pd.concat([fi_fold.train_prices, fi_fold.test_prices]).sort_index()
+            fi_ew, fi_bh, fi_bm = _compute_portfolio_returns(
+                fi_all, fi_fold.tickers, fi_fold.test_dates, fi_fold.train_end
+            )
+            folds_data.append(
+                {
+                    "fold": fi,
+                    "ppo": _fold_metrics(fi_ew, fi_bm),  # EW proxy
+                    "ew": _fold_metrics(fi_ew, fi_bm),
+                    "hold": _fold_metrics(fi_bh, fi_bm),
+                    "bm": _fold_metrics(fi_bm, fi_bm),
+                }
+            )
 
     return {
         "tickers": tickers,
@@ -496,13 +587,14 @@ def _build_dashboard_data(dp, last_bundle, agent_bundle) -> dict:
         "market_brief": market_brief,
         "weights": weights,
         "test_dates": test_dates,
-        "ppo_ret": ew_ret,  # EW proxy — label updated in Backtest page
+        "ppo_ret": ppo_ret,
         "ew_ret": ew_ret,
         "hold_ret": hold_ret,
         "bm_ret": bm_ret,
         "folds": folds_data,
         # metadata
         "n_folds": dp.n_folds,
+        "ppo_trained": ppo_trained,
         "mock_agents": not bool(os.environ.get("ANTHROPIC_API_KEY"))
         and not bool(os.environ.get("HUGGINGFACE_MODEL")),
         "last_fold_test_start": str(last_fold.test_start.date()),
@@ -685,16 +777,43 @@ with st.sidebar:
             st.warning(f"Agent pipeline error: {_e}")
             _agent_bundle = None
 
-        if _last_bundle is not None and _agent_bundle is not None:
-            if (
-                "D" not in st.session_state
-                or st.session_state.get("_tickers_key") != _tickers_csv
-            ):
-                with st.spinner("Building dashboard data…"):
-                    st.session_state["D"] = _build_dashboard_data(
-                        _dp, _last_bundle, _agent_bundle
-                    )
-                    st.session_state["_tickers_key"] = _tickers_csv
+    st.markdown("<div class='sidebar-divider'></div>", unsafe_allow_html=True)
+
+    # ── RL / PPO Training ─────────────────────────────────────────────────
+    st.markdown("**RL / PPO AGENT**")
+    _rl_requested = st.checkbox(
+        "Train PPO agent (last 3 folds)",
+        value=st.session_state.get("_rl_requested_" + _tickers_csv, False),
+        help=(
+            "Trains the PPO reinforcement learning agent on the last 3 "
+            "walk-forward folds using GARCH/HMM features as state input. "
+            "Results are cached — re-checking only retrains when the "
+            "ticker universe changes. May take several minutes on CPU."
+        ),
+    )
+    _rl_results = None
+    _rl_ok = False
+    if _rl_requested and _dp is not None:
+        try:
+            _rl_results = _run_rl_pipeline(_tickers_csv, _dp)
+            _rl_ok = True
+            st.session_state["_rl_requested_" + _tickers_csv] = True
+        except Exception as _e:
+            st.warning(f"RL training error: {_e}")
+            _rl_results = None
+
+    if _dp is not None and _last_bundle is not None and _agent_bundle is not None:
+        # Cache key encodes whether RL results are available
+        _dash_key = _tickers_csv + (":rl" if _rl_ok else ":norl")
+        if (
+            "D" not in st.session_state
+            or st.session_state.get("_tickers_key") != _dash_key
+        ):
+            with st.spinner("Building dashboard data…"):
+                st.session_state["D"] = _build_dashboard_data(
+                    _dp, _last_bundle, _agent_bundle, rl_results=_rl_results
+                )
+                st.session_state["_tickers_key"] = _dash_key
 
     D = st.session_state.get("D")
 
@@ -731,13 +850,18 @@ with st.sidebar:
         )
         else "Cached"
     )
+    _rl_mode = (
+        "Trained (PPO)"
+        if _rl_ok
+        else ("Training…" if _rl_requested else "Not trained (EW proxy)")
+    )
     st.markdown(
         f"<p style='font-size:0.65rem;color:#6b7fa3;font-family:IBM Plex Mono,monospace'>"
         f"Market data: yfinance<br>"
         f"Macro data: {_fred_mode}<br>"
         f"FF factors: Ken French library<br>"
         f"Agents: {_agent_mode}<br>"
-        f"RL/PPO: not trained (EW proxy)</p>",
+        f"RL/PPO: {_rl_mode}</p>",
         unsafe_allow_html=True,
     )
 
@@ -777,7 +901,9 @@ if page == "Overview":
     n_folds = D["n_folds"]
     last_ew_sharpe = _sharpe(D["ew_ret"])
     last_bm_sharpe = _sharpe(D["bm_ret"])
-    sharpe_diff = last_ew_sharpe - last_bm_sharpe
+    last_ppo_sharpe = _sharpe(D["ppo_ret"]) if D["ppo_trained"] else last_ew_sharpe
+    sharpe_diff = last_ppo_sharpe - last_bm_sharpe
+    _sharpe_label = "PPO Sharpe (OOS)" if D["ppo_trained"] else "EW Sharpe (OOS)"
     test_period = f"{D['last_fold_test_start']} → {D['last_fold_test_end']}"
 
     col1, col2, col3, col4, col5 = st.columns(5)
@@ -787,8 +913,8 @@ if page == "Overview":
         st.metric("Walk-Forward Folds", str(n_folds), "Expanding window")
     with col3:
         st.metric(
-            "EW Sharpe (OOS)",
-            f"{last_ew_sharpe:.2f}",
+            _sharpe_label,
+            f"{last_ppo_sharpe:.2f}",
             f"{sharpe_diff:+.2f} vs Benchmark",
         )
     with col4:
@@ -1327,11 +1453,11 @@ elif page == "Agent Insights":
         st.metric("Conviction Score", f"{mb['conviction_score']:.0%}")
     with c4:
         regime_color = {"risk_on": "green", "risk_off": "red", "transitional": "amber"}
-        # st.metric(
-        #     "Signal",
-        #     badge(mb["macro_regime"], regime_color.get(mb["macro_regime"], "teal")),
-        #     label_visibility="hidden",
-        # )
+        st.markdown(
+            f"<p style='font-size:0.85rem;color:{COLORS['muted']};margin:0 0 4px 0'>Signal</p>"
+            + badge(mb["macro_regime"], regime_color.get(mb["macro_regime"], "teal")),
+            unsafe_allow_html=True,
+        )
 
     c_left, c_right = st.columns([1.5, 1])
 
@@ -1436,24 +1562,25 @@ elif page == "Agent Insights":
     # Agent topology
     section("AGENT GRAPH TOPOLOGY (LangGraph)")
     fig_graph = go.Figure()
-    nodes = [
-        ("MacroAgent", 0.15, 0.75, COLORS["teal"]),
-        ("SectorAgent×N", 0.50, 0.75, COLORS["amber"]),
-        ("CompanyAgent×M", 0.50, 0.40, COLORS["green"]),
-        ("OrchestratorAgent", 0.82, 0.57, "#8b5cf6"),
-    ]
-    start = ("START", 0.02, 0.57, COLORS["muted"])
-    end = ("MarketBrief", 0.98, 0.57, COLORS["amber"])
 
-    for name, x, y, color in [start] + nodes + [end]:
-        is_node = name not in ("START", "MarketBrief")
-        shape = "rect" if is_node else "circle"
+    # Sequential chain: START → MacroAgent → SectorAgent×N → CompanyAgent×M
+    #                       → OrchestratorAgent → MarketBrief
+    # Each tuple: (name, x_center, y_center, color, half_width, half_height)
+    _graph_items = [
+        ("START", 0.04, 0.60, COLORS["muted"], 0.04, 0.08),
+        ("MacroAgent", 0.22, 0.60, COLORS["teal"], 0.07, 0.10),
+        ("SectorAgent×N", 0.40, 0.60, COLORS["amber"], 0.07, 0.10),
+        ("CompanyAgent×M", 0.59, 0.60, COLORS["green"], 0.07, 0.10),
+        ("OrchestratorAgent", 0.79, 0.60, "#8b5cf6", 0.09, 0.10),
+        ("MarketBrief", 0.96, 0.60, COLORS["amber"], 0.04, 0.08),
+    ]
+    for name, x, y, color, hw, hh in _graph_items:
         fig_graph.add_shape(
             type="rect",
-            x0=x - 0.10,
-            y0=y - 0.10,
-            x1=x + 0.10,
-            y1=y + 0.10,
+            x0=x - hw,
+            y0=y - hh,
+            x1=x + hw,
+            y1=y + hh,
             fillcolor=hex8_to_rgba(color + "22"),
             line=dict(color=color, width=1.5),
         )
@@ -1462,18 +1589,23 @@ elif page == "Agent Insights":
             y=y,
             text=f"<b>{name}</b>",
             showarrow=False,
-            font=dict(size=10, color=color, family="IBM Plex Mono"),
+            font=dict(
+                size=9 if name == "OrchestratorAgent" else 10,
+                color=color,
+                family="IBM Plex Mono",
+            ),
         )
 
-    edges = [
-        (0.02, 0.57, 0.15 - 0.10, 0.75, True),
-        (0.02, 0.57, 0.50 - 0.10, 0.75, True),
-        (0.15 + 0.10, 0.75, 0.50 - 0.10, 0.40, False),
-        (0.50 + 0.10, 0.75, 0.50 + 0.10, 0.40, False),
-        (0.50 + 0.10, 0.40, 0.82 - 0.10, 0.57, True),
-        (0.82 + 0.10, 0.57, 0.98 - 0.10, 0.57, True),
+    # Sequential edges: right edge of each node → left edge of next
+    # (x0,y0) = departure point, (x1,y1) = arrival point
+    _graph_edges = [
+        (0.08, 0.60, 0.15, 0.60),  # START → MacroAgent
+        (0.29, 0.60, 0.33, 0.60),  # MacroAgent → SectorAgent×N
+        (0.47, 0.60, 0.52, 0.60),  # SectorAgent×N → CompanyAgent×M
+        (0.66, 0.60, 0.70, 0.60),  # CompanyAgent×M → OrchestratorAgent
+        (0.88, 0.60, 0.92, 0.60),  # OrchestratorAgent → MarketBrief
     ]
-    for x0, y0, x1, y1, arrow in edges:
+    for x0, y0, x1, y1 in _graph_edges:
         fig_graph.add_annotation(
             x=x1,
             y=y1,
@@ -1481,19 +1613,17 @@ elif page == "Agent Insights":
             ay=y0,
             axref="x",
             ayref="y",
-            arrowhead=2 if arrow else 0,
+            arrowhead=2,
             arrowsize=1.2,
             arrowwidth=1.2,
-            arrowcolor="#1e2d4a",
+            arrowcolor=COLORS["muted"],
         )
 
     fig_graph.add_annotation(
         x=0.50,
-        y=0.10,
-        # text="⟲  Macro + Sector nodes run in <b>parallel</b> · "
-        # "CompanyAgent × M runs after both · Orchestrator synthesizes all",
-        text="⟲  Macro + Sector nodes run <b>sequentially</b> · "
-        "CompanyAgent × M runs after both · Orchestrator synthesizes all",
+        y=0.15,
+        text="All agents run <b>sequentially</b>: "
+        "Macro → Sector (×N) → Company (×M) → Orchestrator → MarketBrief",
         showarrow=False,
         font=dict(size=9, color=COLORS["muted"], family="IBM Plex Mono"),
     )
@@ -1766,10 +1896,11 @@ elif page == "Portfolio":
 # ─────────────────────────────────────────────────────────────────────────────
 elif page == "Backtest":
     st.markdown("## Backtest Report")
+    _n_strats = 4 if D["ppo_trained"] else 3
     st.markdown(
         badge("Walk-Forward OOS", "teal")
         + "  "
-        + badge("3 Strategies", "amber")
+        + badge(f"{_n_strats} Strategies", "amber")
         + "  "
         + badge("Tax-Adjusted", "green")
         + "  "
@@ -1777,28 +1908,46 @@ elif page == "Backtest":
         unsafe_allow_html=True,
     )
 
-    st.info(
-        "ℹ PPO agent has not been trained — showing Equal Weight as the active strategy. "
-        "Run `rl/pipeline.py` to train the PPO agent and replace EW with trained returns.",
-        icon=None,
-    )
+    if not D["ppo_trained"]:
+        st.info(
+            "ℹ PPO agent has not been trained yet. "
+            "Enable **Train PPO agent (last 3 folds)** in the sidebar to train on the "
+            "last 3 walk-forward folds. Until then, Equal Weight is shown as a proxy.",
+            icon=None,
+        )
 
+    ppo = D["ppo_ret"]
     ew = D["ew_ret"]
     hold = D["hold_ret"]
     bm = D["bm_ret"]
     td = D["test_dates"]
 
-    # Use EW as the primary strategy (PPO not trained)
-    strategies = {
-        "Equal Weight": ew,
-        "Buy & Hold": hold,
-        "Benchmark (SPY)": bm,
-    }
-    _STRATEGY_COLORS_ACTUAL = {
-        "Equal Weight": COLORS["amber"],
-        "Buy & Hold": COLORS["teal"],
-        "Benchmark (SPY)": COLORS["muted"],
-    }
+    if D["ppo_trained"]:
+        strategies = {
+            "PPO": ppo,
+            "Equal Weight": ew,
+            "Buy & Hold": hold,
+            "Benchmark (SPY)": bm,
+        }
+        _STRAT_COLORS = {
+            "PPO": COLORS["amber"],
+            "Equal Weight": COLORS["teal"],
+            "Buy & Hold": "#8b5cf6",
+            "Benchmark (SPY)": COLORS["muted"],
+        }
+        _primary = "PPO"
+    else:
+        strategies = {
+            "Equal Weight": ew,
+            "Buy & Hold": hold,
+            "Benchmark (SPY)": bm,
+        }
+        _STRAT_COLORS = {
+            "Equal Weight": COLORS["amber"],
+            "Buy & Hold": COLORS["teal"],
+            "Benchmark (SPY)": COLORS["muted"],
+        }
+        _primary = "Equal Weight"
 
     # Summary metrics
     section("AGGREGATE PERFORMANCE SUMMARY")
@@ -1837,13 +1986,13 @@ elif page == "Backtest":
     fig_cum = go.Figure()
     for name, r in strategies.items():
         cum = np.cumprod(1 + r)
-        color = _STRATEGY_COLORS_ACTUAL.get(name, COLORS["muted"])
+        color = _STRAT_COLORS.get(name, COLORS["muted"])
         fig_cum.add_trace(
             go.Scatter(
                 x=td,
                 y=cum,
                 name=name,
-                line=dict(color=color, width=2.0 if name == "Equal Weight" else 1.4),
+                line=dict(color=color, width=2.2 if name == _primary else 1.4),
             )
         )
     fig_cum.add_hline(y=1.0, line=dict(color=COLORS["border"], width=1, dash="dot"))
@@ -1862,17 +2011,17 @@ elif page == "Backtest":
             cum = np.cumprod(1 + r)
             peak = np.maximum.accumulate(cum)
             dd = (cum - peak) / (peak + 1e-9)
-            color = _STRATEGY_COLORS_ACTUAL.get(name, COLORS["muted"])
+            color = _STRAT_COLORS.get(name, COLORS["muted"])
             fig_dd.add_trace(
                 go.Scatter(
                     x=td,
                     y=dd * 100,
                     name=name,
-                    fill="tozeroy" if name == "Equal Weight" else None,
+                    fill="tozeroy" if name == _primary else None,
                     fillcolor=hex8_to_rgba(color + "18"),
                     line=dict(
                         color=color,
-                        width=1.5 if name == "Equal Weight" else 1.0,
+                        width=1.5 if name == _primary else 1.0,
                     ),
                 )
             )
@@ -1893,7 +2042,7 @@ elif page == "Backtest":
             for t_i in range(W - 1, len(r)):
                 w_sl = r[t_i - W + 1 : t_i + 1]
                 rs[t_i] = w_sl.mean() / (w_sl.std(ddof=1) + 1e-9) * np.sqrt(4)
-            color = _STRATEGY_COLORS_ACTUAL.get(name, COLORS["muted"])
+            color = _STRAT_COLORS.get(name, COLORS["muted"])
             fig_rs.add_trace(
                 go.Scatter(
                     x=td,
@@ -1901,7 +2050,7 @@ elif page == "Backtest":
                     name=name,
                     line=dict(
                         color=color,
-                        width=1.5 if name == "Equal Weight" else 1.0,
+                        width=1.5 if name == _primary else 1.0,
                     ),
                 )
             )
@@ -1918,8 +2067,18 @@ elif page == "Backtest":
     # Per-fold breakdown
     section("WALK-FORWARD FOLD BREAKDOWN (LAST 3 FOLDS)")
     fold_rows = []
+    _fold_strat_keys = (
+        [
+            ("PPO", "ppo"),
+            ("Equal Weight", "ew"),
+            ("Buy & Hold", "hold"),
+            ("Benchmark (SPY)", "bm"),
+        ]
+        if D["ppo_trained"]
+        else [("Equal Weight", "ew"), ("Buy & Hold", "hold"), ("Benchmark (SPY)", "bm")]
+    )
     for fd in D["folds"]:
-        for strat, key in [("Equal Weight", "ew"), ("Benchmark (SPY)", "bm")]:
+        for strat, key in _fold_strat_keys:
             fold_rows.append(
                 {
                     "Fold": f"Fold {fd['fold']}",
@@ -1936,13 +2095,26 @@ elif page == "Backtest":
 
     c3, c4 = st.columns(2)
     with c3:
+        _bar_strats = (
+            [
+                ("PPO", COLORS["amber"]),
+                ("Equal Weight", COLORS["teal"]),
+                ("Buy & Hold", "#8b5cf6"),
+                ("Benchmark (SPY)", COLORS["muted"]),
+            ]
+            if D["ppo_trained"]
+            else [
+                ("Equal Weight", COLORS["amber"]),
+                ("Buy & Hold", COLORS["teal"]),
+                ("Benchmark (SPY)", COLORS["muted"]),
+            ]
+        )
         fig_fold = go.Figure()
-        for strat, color in [
-            ("Equal Weight", COLORS["amber"]),
-            ("Benchmark (SPY)", COLORS["muted"]),
-        ]:
+        for strat, color in _bar_strats:
             mask = fold_df["Strategy"] == strat
             fdata = fold_df[mask]
+            if fdata.empty:
+                continue
             sharpes = [float(s) for s in fdata["Sharpe"]]
             fig_fold.add_trace(
                 go.Bar(
@@ -1986,15 +2158,19 @@ elif page == "Backtest":
 
     # Tax drag
     section("TAX DRAG ANALYSIS")
-    # Estimate tax cost: proportional to turnover × avg gain × short-term rate
-    # For EW quarterly rebalancing: avg turnover ≈ 20%, gain rate ≈ return/2
-    tc_ew = np.abs(ew) * 0.20 * 0.37  # 20% turnover, short-term rate
-    tc_hold = np.zeros(len(hold))  # buy-and-hold: minimal turnover
-
-    gross_ret = {
-        k: _ann_ret(v) for k, v in {"Equal Weight": ew, "Buy & Hold": hold}.items()
+    # PPO: active turnover ≈ 40%  |  EW: quarterly rebalancing ≈ 20%  |  Hold: ≈ 2%
+    if D["ppo_trained"]:
+        _tax_strats = {
+            "PPO": (ppo, 0.40),
+            "Equal Weight": (ew, 0.20),
+            "Buy & Hold": (hold, 0.02),
+        }
+    else:
+        _tax_strats = {"Equal Weight": (ew, 0.20), "Buy & Hold": (hold, 0.02)}
+    gross_ret = {k: _ann_ret(v) for k, (v, _) in _tax_strats.items()}
+    drag = {
+        k: float(np.abs(v).mean() * to * 0.37) for k, (v, to) in _tax_strats.items()
     }
-    drag = {"Equal Weight": tc_ew.sum() / 4, "Buy & Hold": 0.0}
     after_tax = {k: gross_ret[k] - drag[k] for k in gross_ret}
 
     fig_tax2 = go.Figure()
@@ -2046,6 +2222,7 @@ elif page == "Backtest":
     with c6:
         json_data = json.dumps(
             {
+                "ppo_trained": D["ppo_trained"],
                 "strategies": list(strategies.keys()),
                 "test_period": {
                     "start": str(td[0].date()) if len(td) else "",
@@ -2070,13 +2247,13 @@ elif page == "Backtest":
         muted_c = COLORS["muted"]
         amber_c = COLORS["amber"]
         green_c = COLORS["green"]
-        ew_sharpe = _sharpe(ew)
-        bm_sharpe = _sharpe(bm)
-        sharpe_diff_val = ew_sharpe - bm_sharpe
+        _best_name = max(strategies.items(), key=lambda kv: _sharpe(kv[1]))[0]
+        _best_sharpe = _sharpe(strategies[_best_name])
+        sharpe_diff_val = _best_sharpe - _sharpe(bm)
         st.markdown(
             "<div style='font-size:0.75rem;color:" + muted_c + ";"
             "font-family:IBM Plex Mono;padding-top:0.5rem'>"
-            "Best strategy: <b style='color:" + amber_c + "'>Equal Weight</b><br>"
+            "Best strategy: <b style='color:" + amber_c + f"'>{_best_name}</b><br>"
             "Sharpe vs Benchmark: <b style='color:" + green_c + "'>"
             f"{sharpe_diff_val:+.3f}</b></div>",
             unsafe_allow_html=True,
