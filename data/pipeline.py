@@ -289,7 +289,7 @@ class DataPipeline:
 
     @property
     def sec_metadata(self) -> pd.DataFrame:
-        return self._sec_metadata or pd.DataFrame()
+        return self._sec_metadata if self._sec_metadata is not None else pd.DataFrame()
 
     # ------------------------------------------------------------------
     # Pipeline stages

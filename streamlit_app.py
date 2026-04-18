@@ -22,6 +22,20 @@ from pathlib import Path
 # Allow imports from the project root regardless of where the app is launched
 sys.path.insert(0, os.path.dirname(__file__))
 
+import httpx
+from huggingface_hub.utils import set_client_factory
+
+
+# 1. Define a factory function that returns a configured httpx.Client
+def my_custom_client_factory():
+    return httpx.Client(
+        verify=False,
+    )
+
+
+# 2. Register the factory
+set_client_factory(my_custom_client_factory)
+
 import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
@@ -32,6 +46,20 @@ logging.basicConfig(level=logging.WARNING)  # keep pipeline logs quiet in UI
 
 _PROJECT_ROOT = Path(__file__).parent
 _CACHE_ROOT = str(_PROJECT_ROOT / "data" / "cache")
+
+
+def hex8_to_rgba(hex8):
+    # Remove # if present
+    hex8 = hex8.lstrip("#")
+
+    # Extract pairs
+    r = int(hex8[0:2], 16)
+    g = int(hex8[2:4], 16)
+    b = int(hex8[4:6], 16)
+    a = int(hex8[6:8], 16) / 255.0
+
+    return f"rgba({r}, {g}, {b}, {a:.2f})"
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Page config (must be first Streamlit call)
@@ -242,7 +270,7 @@ def _load_last_forecast_bundle(tickers_csv: str, _dp):
     from forecasting.pipeline import ForecastingPipeline
 
     fp = ForecastingPipeline(ForecastConfig())
-    fp.load_factors(use_cache=True)
+    fp.load_factors(use_cache=True, force_refresh=True)
     last_fold = _dp.get_fold(_dp.n_folds - 1)
     return fp.run_fold(last_fold)
 
@@ -274,7 +302,7 @@ def _load_agent_bundle(tickers_csv: str, _dp):
         cache_dir=str(_PROJECT_ROOT / "data" / "cache" / "agent_briefs"),
     )
     fold = _dp.get_fold(_dp.n_folds - 1)
-    return ap.run_fold(fold, sec_metadata=None)
+    return ap.run_fold(fold, sec_metadata=_dp.sec_metadata)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -475,7 +503,8 @@ def _build_dashboard_data(dp, last_bundle, agent_bundle) -> dict:
         "folds": folds_data,
         # metadata
         "n_folds": dp.n_folds,
-        "mock_agents": not bool(os.environ.get("ANTHROPIC_API_KEY")),
+        "mock_agents": not bool(os.environ.get("ANTHROPIC_API_KEY"))
+        and not bool(os.environ.get("HUGGINGFACE_MODEL")),
         "last_fold_test_start": str(last_fold.test_start.date()),
         "last_fold_test_end": str(last_fold.test_end.date()),
     }
@@ -607,9 +636,9 @@ with st.sidebar:
 
     # ── Universe configuration ────────────────────────────────────────────
     st.markdown("**UNIVERSE**")
-    from data.config import DEFAULT_UNIVERSE
 
-    default_tickers_text = ", ".join(DEFAULT_UNIVERSE)
+    # default_tickers_text = ", ".join(DEFAULT_UNIVERSE)
+    default_tickers_text = "ANET, RTX"
     tickers_input = st.text_area(
         "Tickers (comma-separated)",
         value=default_tickers_text,
@@ -688,7 +717,12 @@ with st.sidebar:
     st.markdown("<div class='sidebar-divider'></div>", unsafe_allow_html=True)
 
     # ── Data source status ────────────────────────────────────────────────
-    _agent_mode = "Live LLM" if os.environ.get("ANTHROPIC_API_KEY") else "Mock mode"
+
+    _agent_mode = (
+        "Live LLM"
+        if os.environ.get("ANTHROPIC_API_KEY") or os.environ.get("HUGGINGFACE_MODEL")
+        else "Mock mode"
+    )
     _fred_mode = (
         "Live FRED"
         if (
@@ -808,7 +842,7 @@ if page == "Overview":
             y0=y - 0.14,
             x1=x + 0.085,
             y1=y + 0.08,
-            fillcolor=color + "22",
+            fillcolor=hex8_to_rgba(color + "22"),
             line=dict(color=color, width=1.5),
         )
         fig_arch.add_annotation(
@@ -824,7 +858,7 @@ if page == "Overview":
             y=y - 0.07,
             text=detail,
             showarrow=False,
-            font=dict(size=8.5, color="#f0f4ff88"),
+            font=dict(size=8.5, color=hex8_to_rgba("#f0f4ff88")),
             align="center",
         )
 
@@ -864,7 +898,7 @@ if page == "Overview":
             y0=bar_y - 0.04,
             x1=x_start + width,
             y1=bar_y + 0.04,
-            fillcolor=color + "44",
+            fillcolor=hex8_to_rgba(color + "44"),
             line=dict(color=color, width=1),
         )
         if dim > 20:
@@ -893,15 +927,17 @@ if page == "Overview":
         font=dict(size=9.5, color=COLORS["muted"], family="IBM Plex Mono"),
     )
 
+    this_layout = PLOTLY_LAYOUT.copy()
+    del this_layout["xaxis"], this_layout["yaxis"], this_layout["margin"]
     fig_arch.update_layout(
-        **PLOTLY_LAYOUT,
+        **this_layout,
         height=340,
         xaxis=dict(visible=False, range=[0, 1]),
         yaxis=dict(visible=False, range=[0.04, 1.0]),
         showlegend=False,
         margin=dict(l=10, r=10, t=10, b=10),
     )
-    st.plotly_chart(fig_arch, use_container_width=True)
+    st.plotly_chart(fig_arch, width="stretch")
 
     section("GPU ACCELERATION LAYERS")
     gpu_table = {
@@ -949,13 +985,15 @@ if page == "Overview":
     df_gpu = pd.DataFrame(gpu_table)
     st.dataframe(
         df_gpu.style.applymap(
-            lambda v: "color: #f59e0b; font-family: IBM Plex Mono"
-            if "×" in str(v)
-            else "color: #06b6d4; font-family: IBM Plex Mono",
+            lambda v: (
+                "color: #f59e0b; font-family: IBM Plex Mono"
+                if "×" in str(v)
+                else "color: #06b6d4; font-family: IBM Plex Mono"
+            ),
             subset=["Technology", "Est. Speedup"],
         ),
         hide_index=True,
-        use_container_width=True,
+        width="stretch",
     )
 
 
@@ -993,13 +1031,13 @@ elif page == "Market Data":
                 name=selected_ticker,
                 line=dict(color=COLORS["amber"], width=1.5),
                 fill="tozeroy",
-                fillcolor=COLORS["amber"] + "18",
+                fillcolor=hex8_to_rgba(COLORS["amber"] + "18"),
             )
         )
         fig_price.update_layout(
             **PLOTLY_LAYOUT, height=240, yaxis_title="Price (USD)", showlegend=False
         )
-        st.plotly_chart(fig_price, use_container_width=True)
+        st.plotly_chart(fig_price, width="stretch")
 
     # Universe grid
     section("UNIVERSE OVERVIEW")
@@ -1060,13 +1098,15 @@ elif page == "Market Data":
                 textfont=dict(family="IBM Plex Mono", size=9),
             )
         )
+        this_layout = PLOTLY_LAYOUT.copy()
+        del this_layout["margin"]
         fig_sector.update_layout(
-            **PLOTLY_LAYOUT,
+            **this_layout,
             height=280,
             showlegend=False,
             margin=dict(l=10, r=10, t=10, b=10),
         )
-        st.plotly_chart(fig_sector, use_container_width=True)
+        st.plotly_chart(fig_sector, width="stretch")
 
     with c2:
         # Macro signals
@@ -1133,7 +1173,7 @@ elif page == "Forecasting":
         yaxis_title="Annualized Vol (%)",
         yaxis_ticksuffix="%",
     )
-    st.plotly_chart(fig_garch, use_container_width=True)
+    st.plotly_chart(fig_garch, width="stretch")
 
     c1, c2 = st.columns(2)
 
@@ -1160,19 +1200,21 @@ elif page == "Forecasting":
                     x=regime_recent.index,
                     y=regime_recent[state],
                     name=label_name,
-                    marker_color=color + "99",
+                    marker_color=hex8_to_rgba(color + "99"),
                     marker_line_width=0,
                 )
             )
+        this_layout = PLOTLY_LAYOUT.copy()
+        del this_layout["yaxis"], this_layout["legend"]
         fig_regime.update_layout(
-            **PLOTLY_LAYOUT,
+            **this_layout,
             barmode="stack",
             height=230,
             yaxis_title="Posterior Probability",
             yaxis=dict(**PLOTLY_LAYOUT["yaxis"], tickformat=".0%"),
             legend=dict(orientation="h", y=-0.25, x=0),
         )
-        st.plotly_chart(fig_regime, use_container_width=True)
+        st.plotly_chart(fig_regime, width="stretch")
 
     # ── FF betas heatmap ──
     with c2:
@@ -1199,9 +1241,9 @@ elif page == "Forecasting":
                     x=disp_cols,
                     y=ff_disp.index.tolist(),
                     colorscale=[
-                        [0.0, COLORS["red"] + "cc"],
+                        [0.0, hex8_to_rgba(COLORS["red"] + "cc")],
                         [0.5, "#1e2d4a"],
-                        [1.0, COLORS["green"] + "cc"],
+                        [1.0, hex8_to_rgba(COLORS["green"] + "cc")],
                     ],
                     zmid=0,
                     text=[[f"{v:.2f}" for v in row] for row in ff_disp.values],
@@ -1211,13 +1253,15 @@ elif page == "Forecasting":
                     colorbar=dict(thickness=10, tickfont=dict(size=9)),
                 )
             )
+            this_layout = PLOTLY_LAYOUT.copy()
+            del this_layout["xaxis"], this_layout["margin"]
             fig_ff.update_layout(
-                **PLOTLY_LAYOUT,
+                **this_layout,
                 height=max(260, len(ff_disp) * 18 + 60),
                 xaxis=dict(**PLOTLY_LAYOUT["xaxis"], side="top"),
                 margin=dict(l=60, r=20, t=30, b=10),
             )
-            st.plotly_chart(fig_ff, use_container_width=True)
+            st.plotly_chart(fig_ff, width="stretch")
 
     # ── Vol vol surface ──
     section("CROSS-SECTIONAL VOLATILITY DISTRIBUTION OVER TIME")
@@ -1227,7 +1271,10 @@ elif page == "Forecasting":
             _garch_clean.quantile([0.1, 0.25, 0.5, 0.75, 0.9], axis=1).T * 100
         )
         fig_vol = go.Figure()
-        fills = [(0.1, 0.9, COLORS["teal"] + "18"), (0.25, 0.75, COLORS["teal"] + "30")]
+        fills = [
+            (0.1, 0.9, hex8_to_rgba(COLORS["teal"] + "18")),
+            (0.25, 0.75, hex8_to_rgba(COLORS["teal"] + "30")),
+        ]
         for lo, hi, fill in fills:
             fig_vol.add_trace(
                 go.Scatter(
@@ -1250,7 +1297,7 @@ elif page == "Forecasting":
         fig_vol.update_layout(
             **PLOTLY_LAYOUT, height=200, yaxis_title="Ann. Vol (%)", showlegend=False
         )
-        st.plotly_chart(fig_vol, use_container_width=True)
+        st.plotly_chart(fig_vol, width="stretch")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1280,11 +1327,11 @@ elif page == "Agent Insights":
         st.metric("Conviction Score", f"{mb['conviction_score']:.0%}")
     with c4:
         regime_color = {"risk_on": "green", "risk_off": "red", "transitional": "amber"}
-        st.metric(
-            "Signal",
-            badge(mb["macro_regime"], regime_color.get(mb["macro_regime"], "teal")),
-            label_visibility="hidden",
-        )
+        # st.metric(
+        #     "Signal",
+        #     badge(mb["macro_regime"], regime_color.get(mb["macro_regime"], "teal")),
+        #     label_visibility="hidden",
+        # )
 
     c_left, c_right = st.columns([1.5, 1])
 
@@ -1310,14 +1357,16 @@ elif page == "Agent Insights":
             )
         )
         fig_tilt.add_vline(x=0, line=dict(color="#1e2d4a", width=1))
+        this_layout = PLOTLY_LAYOUT.copy()
+        del this_layout["margin"]
         fig_tilt.update_layout(
-            **PLOTLY_LAYOUT,
+            **this_layout,
             height=300,
             xaxis_title="Tilt (−1 = max underweight, +1 = max overweight)",
             showlegend=False,
             margin=dict(l=100, r=60, t=10, b=30),
         )
-        st.plotly_chart(fig_tilt, use_container_width=True)
+        st.plotly_chart(fig_tilt, width="stretch")
 
         # Key themes
         section("KEY INVESTMENT THEMES")
@@ -1405,7 +1454,7 @@ elif page == "Agent Insights":
             y0=y - 0.10,
             x1=x + 0.10,
             y1=y + 0.10,
-            fillcolor=color + "22",
+            fillcolor=hex8_to_rgba(color + "22"),
             line=dict(color=color, width=1.5),
         )
         fig_graph.add_annotation(
@@ -1441,21 +1490,25 @@ elif page == "Agent Insights":
     fig_graph.add_annotation(
         x=0.50,
         y=0.10,
-        text="⟲  Macro + Sector nodes run in <b>parallel</b> · "
+        # text="⟲  Macro + Sector nodes run in <b>parallel</b> · "
+        # "CompanyAgent × M runs after both · Orchestrator synthesizes all",
+        text="⟲  Macro + Sector nodes run <b>sequentially</b> · "
         "CompanyAgent × M runs after both · Orchestrator synthesizes all",
         showarrow=False,
         font=dict(size=9, color=COLORS["muted"], family="IBM Plex Mono"),
     )
 
+    this_layout = PLOTLY_LAYOUT.copy()
+    del this_layout["xaxis"], this_layout["yaxis"], this_layout["margin"]
     fig_graph.update_layout(
-        **PLOTLY_LAYOUT,
+        **this_layout,
         height=260,
         xaxis=dict(visible=False, range=[0, 1]),
         yaxis=dict(visible=False, range=[0, 1]),
         showlegend=False,
         margin=dict(l=10, r=10, t=10, b=10),
     )
-    st.plotly_chart(fig_graph, use_container_width=True)
+    st.plotly_chart(fig_graph, width="stretch")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1514,7 +1567,7 @@ elif page == "Portfolio":
             yaxis_tickformat=".0%",
             showlegend=False,
         )
-        st.plotly_chart(fig_w, use_container_width=True)
+        st.plotly_chart(fig_w, width="stretch")
 
     with c2:
         section("PORTFOLIO TREEMAP")
@@ -1529,17 +1582,19 @@ elif page == "Portfolio":
                     colors=[weights[t] for t in weights],
                     colorscale=[
                         [0, "#0d1526"],
-                        [0.5, COLORS["teal"] + "88"],
+                        [0.5, hex8_to_rgba(COLORS["teal"] + "88")],
                         [1, COLORS["amber"]],
                     ],
                     line=dict(color=COLORS["border"], width=1),
                 ),
             )
         )
+        this_layout = PLOTLY_LAYOUT.copy()
+        del this_layout["margin"]
         fig_tree.update_layout(
-            **PLOTLY_LAYOUT, height=260, margin=dict(l=5, r=5, t=5, b=5)
+            **this_layout, height=260, margin=dict(l=5, r=5, t=5, b=5)
         )
-        st.plotly_chart(fig_tree, use_container_width=True)
+        st.plotly_chart(fig_tree, width="stretch")
 
     # Differential Sharpe reward demo
     section("DIFFERENTIAL SHARPE REWARD — EPISODE SIMULATION")
@@ -1586,7 +1641,7 @@ elif page == "Portfolio":
             name="DSR Increment D_t",
             line=dict(color=COLORS["amber"], width=2),
             fill="tozeroy",
-            fillcolor=COLORS["amber"] + "22",
+            fillcolor=hex8_to_rgba(COLORS["amber"] + "22"),
         ),
         row=2,
         col=1,
@@ -1594,14 +1649,16 @@ elif page == "Portfolio":
     fig_ep.add_vrect(
         x0=ep_dates[10],
         x1=ep_dates[13],
-        fillcolor=COLORS["red"] + "18",
+        fillcolor=hex8_to_rgba(COLORS["red"] + "18"),
         line_width=0,
         annotation_text="Crash",
         annotation_font_size=9,
         annotation_position="top left",
     )
+    this_layout = PLOTLY_LAYOUT.copy()
+    del this_layout["legend"]
     fig_ep.update_layout(
-        **PLOTLY_LAYOUT,
+        **this_layout,
         height=300,
         showlegend=True,
         legend=dict(orientation="h", y=-0.15, x=0),
@@ -1619,7 +1676,7 @@ elif page == "Portfolio":
         col=1,
         **{k: v for k, v in PLOTLY_LAYOUT["yaxis"].items()},
     )
-    st.plotly_chart(fig_ep, use_container_width=True)
+    st.plotly_chart(fig_ep, width="stretch")
 
     # Tax model
     section("TAX MODEL — FIFO LOT SIMULATION")
@@ -1634,7 +1691,9 @@ elif page == "Portfolio":
                 y=[r * 100 for r in rates],
                 marker=dict(
                     color=[
-                        COLORS["red"] + "cc" if r == st_rate else COLORS["green"] + "cc"
+                        hex8_to_rgba(COLORS["red"] + "cc")
+                        if r == st_rate
+                        else hex8_to_rgba(COLORS["green"] + "cc")
                         for r in rates
                     ],
                     line=dict(width=0),
@@ -1669,7 +1728,7 @@ elif page == "Portfolio":
             xaxis_title="Holding Period",
             showlegend=False,
         )
-        st.plotly_chart(fig_tax, use_container_width=True)
+        st.plotly_chart(fig_tax, width="stretch")
 
     with c4:
         section("REWARD COMPONENT WEIGHTS")
@@ -1685,7 +1744,7 @@ elif page == "Portfolio":
                 y=list(lambda_vals.values()),
                 marker=dict(
                     color=[
-                        COLORS["amber"] if v > 0 else COLORS["red"] + "bb"
+                        COLORS["amber"] if v > 0 else hex8_to_rgba(COLORS["red"] + "bb")
                         for v in lambda_vals.values()
                     ],
                     opacity=0.9,
@@ -1699,7 +1758,7 @@ elif page == "Portfolio":
         fig_lam.update_layout(
             **PLOTLY_LAYOUT, height=220, yaxis_title="Weight", showlegend=False
         )
-        st.plotly_chart(fig_lam, use_container_width=True)
+        st.plotly_chart(fig_lam, width="stretch")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1770,7 +1829,7 @@ elif page == "Backtest":
             ],
             axis=0,
         ),
-        use_container_width=True,
+        width="stretch",
     )
 
     # Cumulative return chart
@@ -1791,7 +1850,7 @@ elif page == "Backtest":
     fig_cum.update_layout(
         **PLOTLY_LAYOUT, height=280, yaxis_title="Portfolio Value (1 = start)"
     )
-    st.plotly_chart(fig_cum, use_container_width=True)
+    st.plotly_chart(fig_cum, width="stretch")
 
     # Drawdown + rolling Sharpe
     c1, c2 = st.columns(2)
@@ -1810,7 +1869,7 @@ elif page == "Backtest":
                     y=dd * 100,
                     name=name,
                     fill="tozeroy" if name == "Equal Weight" else None,
-                    fillcolor=color + "18",
+                    fillcolor=hex8_to_rgba(color + "18"),
                     line=dict(
                         color=color,
                         width=1.5 if name == "Equal Weight" else 1.0,
@@ -1823,7 +1882,7 @@ elif page == "Backtest":
             yaxis_title="Drawdown (%)",
             yaxis_ticksuffix="%",
         )
-        st.plotly_chart(fig_dd, use_container_width=True)
+        st.plotly_chart(fig_dd, width="stretch")
 
     with c2:
         section("ROLLING SHARPE RATIO (W=8 QUARTERS)")
@@ -1849,12 +1908,12 @@ elif page == "Backtest":
         fig_rs.add_hline(y=0, line=dict(color=COLORS["border"], width=1))
         fig_rs.add_hline(
             y=1,
-            line=dict(color=COLORS["green"] + "55", width=1, dash="dot"),
+            line=dict(color=hex8_to_rgba(COLORS["green"] + "55"), width=1, dash="dot"),
             annotation_text="Sharpe=1",
             annotation_font_size=8,
         )
         fig_rs.update_layout(**PLOTLY_LAYOUT, height=240, yaxis_title="Sharpe")
-        st.plotly_chart(fig_rs, use_container_width=True)
+        st.plotly_chart(fig_rs, width="stretch")
 
     # Per-fold breakdown
     section("WALK-FORWARD FOLD BREAKDOWN (LAST 3 FOLDS)")
@@ -1894,31 +1953,35 @@ elif page == "Backtest":
                 )
             )
         fig_fold.add_hline(y=0, line=dict(color=COLORS["border"], width=1))
+        this_layout = PLOTLY_LAYOUT.copy()
+        del this_layout["legend"]
         fig_fold.update_layout(
-            **PLOTLY_LAYOUT,
+            **this_layout,
             barmode="group",
             height=230,
             yaxis_title="Sharpe Ratio",
             legend=dict(orientation="h", y=-0.3, x=0),
         )
-        st.plotly_chart(fig_fold, use_container_width=True)
+        st.plotly_chart(fig_fold, width="stretch")
 
     with c4:
         st.dataframe(
             fold_df.style.applymap(
-                lambda v: f"color:{COLORS['amber']};font-family:IBM Plex Mono"
-                if isinstance(v, str)
-                and v.replace("%", "")
-                .replace(".", "")
-                .replace("-", "")
-                .replace("+", "")
-                .lstrip()
-                .isnumeric()
-                else "font-family:IBM Plex Mono"
+                lambda v: (
+                    f"color:{COLORS['amber']};font-family:IBM Plex Mono"
+                    if isinstance(v, str)
+                    and v.replace("%", "")
+                    .replace(".", "")
+                    .replace("-", "")
+                    .replace("+", "")
+                    .lstrip()
+                    .isnumeric()
+                    else "font-family:IBM Plex Mono"
+                )
             ),
             height=230,
             hide_index=True,
-            use_container_width=True,
+            width="stretch",
         )
 
     # Tax drag
@@ -1941,7 +2004,7 @@ elif page == "Backtest":
             name="Gross Return",
             x=x_strats,
             y=[v * 100 for v in gross_ret.values()],
-            marker=dict(color=COLORS["amber"] + "99", opacity=0.9),
+            marker=dict(color=hex8_to_rgba(COLORS["amber"] + "99"), opacity=0.9),
         )
     )
     fig_tax2.add_trace(
@@ -1949,7 +2012,7 @@ elif page == "Backtest":
             name="After-Tax Return",
             x=x_strats,
             y=[v * 100 for v in after_tax.values()],
-            marker=dict(color=COLORS["green"] + "99", opacity=0.9),
+            marker=dict(color=hex8_to_rgba(COLORS["green"] + "99"), opacity=0.9),
         )
     )
     fig_tax2.add_trace(
@@ -1957,18 +2020,20 @@ elif page == "Backtest":
             name="Tax Drag",
             x=x_strats,
             y=[v * 100 for v in drag.values()],
-            marker=dict(color=COLORS["red"] + "99", opacity=0.9),
+            marker=dict(color=hex8_to_rgba(COLORS["red"] + "99"), opacity=0.9),
         )
     )
+    this_layout = PLOTLY_LAYOUT.copy()
+    del this_layout["legend"]
     fig_tax2.update_layout(
-        **PLOTLY_LAYOUT,
+        **this_layout,
         barmode="group",
         height=230,
         yaxis_title="Annualized (%)",
         yaxis_ticksuffix="%",
         legend=dict(orientation="h", y=-0.3, x=0),
     )
-    st.plotly_chart(fig_tax2, use_container_width=True)
+    st.plotly_chart(fig_tax2, width="stretch")
 
     # Export
     section("EXPORT")

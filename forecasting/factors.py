@@ -56,6 +56,7 @@ Outputs (per asset, per quarter-end date)
 
 import io
 import logging
+import os
 import zipfile
 from pathlib import Path
 
@@ -171,7 +172,18 @@ class FamaFrenchDataLoader:
         except ImportError as exc:
             raise ImportError("requests is required: pip install requests") from exc
 
-        resp = requests.get(self._url, timeout=60)
+        proxies = {
+            "http": os.environ.get("HTTP_PROXY", ""),
+            "https": os.environ.get("HTTPS_PROXY", ""),
+        }
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+        }
+        verify = os.environ.get("REQUESTS_CA_BUNDLE", False)
+
+        resp = requests.get(
+            self._url, proxies=proxies, headers=headers, verify=verify, timeout=60
+        )
         resp.raise_for_status()
 
         zf = zipfile.ZipFile(io.BytesIO(resp.content))
