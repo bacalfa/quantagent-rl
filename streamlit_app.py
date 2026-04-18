@@ -346,7 +346,7 @@ def _load_agent_bundle(tickers_csv: str, _dp):
         cache_dir=str(_PROJECT_ROOT / "data" / "cache" / "agent_briefs"),
     )
     fold = _dp.get_fold(_dp.n_folds - 1)
-    return ap.run_fold(fold, sec_metadata=_dp.sec_metadata)
+    return ap.run_fold(fold, sec_metadata=_dp.sec_metadata, force_refresh=True)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -359,8 +359,15 @@ def _compute_portfolio_returns(
     tickers: list[str],
     test_dates: "pd.DatetimeIndex",
     train_end: "pd.Timestamp",
-) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """Compute equal-weight, buy-and-hold, and SPY returns over test_dates."""
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """Compute equal-weight, buy-and-hold, and SPY returns over test_dates.
+
+    Returns
+    -------
+    ew_ret, bh_ret, bm_ret, final_bh_weights
+        ``final_bh_weights`` is the drifted buy-and-hold weight vector at the
+        end of the test period (shape ``(n_tickers,)``).
+    """
     prices = all_prices.reindex(columns=tickers).ffill()
     n = len(tickers)
     bh_weights = np.ones(n) / n
@@ -399,7 +406,7 @@ def _compute_portfolio_returns(
         except Exception:
             pass
 
-    return np.array(ew_ret), np.array(bh_ret), bm_ret
+    return np.array(ew_ret), np.array(bh_ret), bm_ret, bh_weights
 
 
 def _fold_metrics(r: np.ndarray, bm: np.ndarray) -> dict:
@@ -520,11 +527,13 @@ def _build_dashboard_data(dp, last_bundle, agent_bundle, rl_results=None) -> dic
         [last_fold.train_prices, last_fold.test_prices]
     ).sort_index()
     test_dates = last_fold.test_dates
-    ew_ret, hold_ret, bm_ret = _compute_portfolio_returns(
+    ew_ret, hold_ret, bm_ret, _hold_w = _compute_portfolio_returns(
         all_prices_fold, last_fold.tickers, test_dates, last_fold.train_end
     )
+    hold_weights_final = {t: float(_hold_w[i]) for i, t in enumerate(last_fold.tickers)}
 
     # ── PPO returns: real if RL trained, EW proxy otherwise ─────────────────
+    ppo_weights_final: dict | None = None
     if rl_results is not None and len(rl_results) > 0:
         last_rl = rl_results[-1]
         ppo_r = np.array(last_rl.ppo_metrics.quarterly_returns, dtype=float)
@@ -535,6 +544,11 @@ def _build_dashboard_data(dp, last_bundle, agent_bundle, rl_results=None) -> dic
         hold_ret = hold_ret[:n_q]
         bm_ret = bm_ret[:n_q]
         ppo_trained = True
+        if last_rl.ppo_metrics.quarterly_weights:
+            _pw = np.array(last_rl.ppo_metrics.quarterly_weights[-1], dtype=float)
+            ppo_weights_final = {
+                t: float(_pw[i]) for i, t in enumerate(last_fold.tickers)
+            }
     else:
         ppo_ret = ew_ret  # EW proxy until RL is trained
         ppo_trained = False
@@ -546,7 +560,7 @@ def _build_dashboard_data(dp, last_bundle, agent_bundle, rl_results=None) -> dic
         for result in rl_results:
             fi_fold = dp.get_fold(result.fold_idx)
             fi_all = pd.concat([fi_fold.train_prices, fi_fold.test_prices]).sort_index()
-            _, _, fi_bm = _compute_portfolio_returns(
+            _, _, fi_bm, _ = _compute_portfolio_returns(
                 fi_all, fi_fold.tickers, fi_fold.test_dates, fi_fold.train_end
             )
             folds_data.append(
@@ -562,7 +576,7 @@ def _build_dashboard_data(dp, last_bundle, agent_bundle, rl_results=None) -> dic
         for fi in range(dp.n_folds - n_show, dp.n_folds):
             fi_fold = dp.get_fold(fi)
             fi_all = pd.concat([fi_fold.train_prices, fi_fold.test_prices]).sort_index()
-            fi_ew, fi_bh, fi_bm = _compute_portfolio_returns(
+            fi_ew, fi_bh, fi_bm, _ = _compute_portfolio_returns(
                 fi_all, fi_fold.tickers, fi_fold.test_dates, fi_fold.train_end
             )
             folds_data.append(
@@ -586,6 +600,8 @@ def _build_dashboard_data(dp, last_bundle, agent_bundle, rl_results=None) -> dic
         "ff_betas": ff_betas,
         "market_brief": market_brief,
         "weights": weights,
+        "hold_weights_final": hold_weights_final,
+        "ppo_weights_final": ppo_weights_final,
         "test_dates": test_dates,
         "ppo_ret": ppo_ret,
         "ew_ret": ew_ret,
@@ -1656,75 +1672,99 @@ elif page == "Portfolio":
     )
 
     # Current weights: equal-weight baseline (PPO not trained)
-    weights = D["weights"]  # already normalized equal weights
+    ew_weights = D["weights"]  # {ticker: 1/N}
+    hold_weights = D["hold_weights_final"]  # {ticker: drifted weight}
+    ppo_weights = D["ppo_weights_final"]  # {ticker: weight} or None
 
-    c1, c2 = st.columns(2)
-
-    with c1:
-        section("CURRENT PORTFOLIO WEIGHTS")
-        sorted_w = sorted(weights.items(), key=lambda x: -x[1])
-        tickers_ = [t for t, _ in sorted_w]
-        wvals_ = [w for _, w in sorted_w]
-        colors_ = [
-            COLORS["amber"]
-            if t in D["market_brief"]["top_overweights"]
-            else COLORS["red"]
-            if t in D["market_brief"]["top_underweights"]
-            else COLORS["teal"]
-            for t in tickers_
-        ]
-
-        fig_w = go.Figure(
+    # ── Strategy weight columns ───────────────────────────────────────────────
+    def _weight_bar(title: str, w_dict: dict, color: str, note: str = "") -> None:
+        """Render a compact bar chart for a weights dict inside the current column."""
+        section(title)
+        sw = sorted(w_dict.items(), key=lambda x: -x[1])
+        ts, ws = zip(*sw)
+        one_n = 1.0 / len(ts)
+        fig = go.Figure(
             go.Bar(
-                x=tickers_,
-                y=wvals_,
-                marker=dict(color=colors_, opacity=0.85),
-                text=[f"{w:.1%}" for w in wvals_],
+                x=list(ts),
+                y=list(ws),
+                marker=dict(color=color, opacity=0.85),
+                text=[f"{v:.1%}" for v in ws],
                 textposition="outside",
                 textfont=dict(family="IBM Plex Mono", size=9),
             )
         )
-        fig_w.add_hline(
-            y=1 / len(tickers_),
+        fig.add_hline(
+            y=one_n,
             line=dict(color=COLORS["muted"], width=1, dash="dot"),
             annotation_text="1/N",
             annotation_font_size=9,
         )
-        fig_w.update_layout(
+        fig.update_layout(
             **PLOTLY_LAYOUT,
-            height=260,
+            height=240,
             yaxis_title="Weight",
             yaxis_tickformat=".0%",
             showlegend=False,
         )
-        st.plotly_chart(fig_w, width="stretch")
+        st.plotly_chart(fig, width="stretch")
+        if note:
+            st.caption(note)
 
-    with c2:
-        section("PORTFOLIO TREEMAP")
-        fig_tree = go.Figure(
-            go.Treemap(
-                labels=list(weights.keys()),
-                parents=["" for _ in weights],
-                values=list(weights.values()),
-                texttemplate="<b>%{label}</b><br>%{percentRoot:.1%}",
-                textfont=dict(family="IBM Plex Mono", size=11),
-                marker=dict(
-                    colors=[weights[t] for t in weights],
-                    colorscale=[
-                        [0, "#0d1526"],
-                        [0.5, hex8_to_rgba(COLORS["teal"] + "88")],
-                        [1, COLORS["amber"]],
-                    ],
-                    line=dict(color=COLORS["border"], width=1),
-                ),
+    n_cols = 3 if ppo_weights is not None else 2
+    wcols = st.columns(n_cols)
+
+    with wcols[0]:
+        _weight_bar(
+            "EQUAL-WEIGHT", ew_weights, COLORS["teal"], "Rebalanced quarterly to 1/N"
+        )
+
+    with wcols[1]:
+        _weight_bar(
+            "BUY-AND-HOLD (final)",
+            hold_weights,
+            COLORS["amber"],
+            "Weights drifted from 1/N at last fold test start",
+        )
+
+    if ppo_weights is not None:
+        with wcols[2]:
+            _weight_bar(
+                "PPO (final optimal)",
+                ppo_weights,
+                COLORS["green"],
+                "Last action of trained PPO agent on OOS test period",
             )
+    else:
+        with wcols[2] if n_cols == 3 else st.container():
+            section("PPO (final optimal)")
+            st.info("Enable **Train PPO agent** in the sidebar to see PPO weights.")
+
+    # ── Treemap: primary strategy (PPO if trained, EW otherwise) ─────────────
+    primary_w = ppo_weights if ppo_weights is not None else ew_weights
+    primary_label = "PPO" if ppo_weights is not None else "Equal-Weight"
+    section(f"PORTFOLIO TREEMAP — {primary_label}")
+    this_layout = PLOTLY_LAYOUT.copy()
+    del this_layout["margin"]
+    fig_tree = go.Figure(
+        go.Treemap(
+            labels=list(primary_w.keys()),
+            parents=["" for _ in primary_w],
+            values=list(primary_w.values()),
+            texttemplate="<b>%{label}</b><br>%{percentRoot:.1%}",
+            textfont=dict(family="IBM Plex Mono", size=11),
+            marker=dict(
+                colors=list(primary_w.values()),
+                colorscale=[
+                    [0, "#0d1526"],
+                    [0.5, hex8_to_rgba(COLORS["teal"] + "88")],
+                    [1, COLORS["amber"]],
+                ],
+                line=dict(color=COLORS["border"], width=1),
+            ),
         )
-        this_layout = PLOTLY_LAYOUT.copy()
-        del this_layout["margin"]
-        fig_tree.update_layout(
-            **this_layout, height=260, margin=dict(l=5, r=5, t=5, b=5)
-        )
-        st.plotly_chart(fig_tree, width="stretch")
+    )
+    fig_tree.update_layout(**this_layout, height=260, margin=dict(l=5, r=5, t=5, b=5))
+    st.plotly_chart(fig_tree, width="stretch")
 
     # Differential Sharpe reward demo
     section("DIFFERENTIAL SHARPE REWARD — EPISODE SIMULATION")
