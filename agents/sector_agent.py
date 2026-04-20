@@ -97,7 +97,7 @@ class SectorAgent(BaseAgent):
             system_prompt=SECTOR_SYSTEM_PROMPT,
             user_message=user_message,
         )
-        return self._parse_brief(raw)
+        return self._parse_brief(raw, as_of_date)
 
     # ------------------------------------------------------------------
     # Helpers
@@ -148,9 +148,10 @@ class SectorAgent(BaseAgent):
         parts += ["", f"Produce the SectorBrief JSON for the {self.sector} sector."]
         return "\n".join(parts)
 
-    def _parse_brief(self, raw: str) -> SectorBrief:
+    def _parse_brief(self, raw: str, as_of_date: str) -> SectorBrief:
         """Parse LLM output into a SectorBrief."""
         fallback = {
+            "as_of_date": as_of_date,
             "sector": self.sector,
             "momentum_score": 0.0,
             "earnings_revision_trend": "neutral",
@@ -161,6 +162,7 @@ class SectorAgent(BaseAgent):
         }
         parsed = self.parse_json_response(raw, fallback)
         # Ensure sector field is always correct
+        parsed["as_of_date"] = as_of_date
         parsed["sector"] = self.sector
 
         try:

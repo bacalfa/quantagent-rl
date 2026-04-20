@@ -15,7 +15,7 @@ quantagent-rl/
 ├── agents/         # LangGraph multi-agent LLM system
 ├── rl/             # Gymnasium environment, PPO agent, differential Sharpe reward
 ├── backtest/       # Walk-forward engine, performance metrics
-└── demo/           # (TODO) Streamlit dashboard
+└── demo/           # Streamlit dashboard
 ```
 
 ---
@@ -102,7 +102,7 @@ uv sync
 ```
 # Create file called .env and add your actual API keys
 
-# Required: Your Anthropic API key from https://console.anthropic.com/
+# Your Anthropic API key from https://console.anthropic.com/ (optional if using HuggingFace model)
 ANTHROPIC_API_KEY=sk-*********************************************************************************************************
 
 # LLM selection

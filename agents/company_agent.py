@@ -91,7 +91,7 @@ class CompanyAgent(BaseAgent):
             system_prompt=COMPANY_SYSTEM_PROMPT,
             user_message=user_message,
         )
-        return self._parse_brief(raw, ticker, xbrl_facts)
+        return self._parse_brief(raw, ticker, xbrl_facts, as_of_date)
 
     # ------------------------------------------------------------------
     # Helpers
@@ -123,14 +123,12 @@ class CompanyAgent(BaseAgent):
         return "\n".join(parts)
 
     def _parse_brief(
-        self,
-        raw: str,
-        ticker: str,
-        xbrl_facts: dict[str, list[dict]],
+        self, raw: str, ticker: str, xbrl_facts: dict[str, list[dict]], as_of_date: str
     ) -> CompanyBrief:
         """Parse LLM output into a CompanyBrief with heuristic fallback."""
-        fallback = self._heuristic_brief(ticker, xbrl_facts)
+        fallback = self._heuristic_brief(ticker, xbrl_facts, as_of_date)
         parsed = self.parse_json_response(raw, fallback)
+        parsed["as_of_date"] = as_of_date
         parsed["ticker"] = ticker
 
         try:
@@ -141,8 +139,7 @@ class CompanyAgent(BaseAgent):
 
     @staticmethod
     def _heuristic_brief(
-        ticker: str,
-        xbrl_facts: dict[str, list[dict]],
+        ticker: str, xbrl_facts: dict[str, list[dict]], as_of_date: str
     ) -> dict:
         """Derive heuristic signals from XBRL data when LLM fails.
 
@@ -173,6 +170,7 @@ class CompanyAgent(BaseAgent):
             fund_score = 0.0
 
         return {
+            "as_of_date": as_of_date,
             "ticker": ticker,
             "revenue_growth_trend": rev_trend,
             "margin_trend": "stable",

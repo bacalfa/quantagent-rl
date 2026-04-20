@@ -36,6 +36,7 @@ fences, no prose before or after, no <think> tokens, no preamble, no postscript.
 The JSON **MUST** match this schema exactly (you **MUST NOT** include newline character '\n' in your response):
  
 {
+  "as_of_date": "<YYYY-MM-DD>",
   "rate_environment": "<one of: tightening | neutral | easing>",
   "inflation_regime": "<one of: high | elevated | moderate | low>",
   "recession_risk": <float between 0.0 and 1.0>,
@@ -61,6 +62,7 @@ fences, no prose before or after, no <think> tokens, no preamble, no postscript.
 The JSON **MUST** match this schema exactly (you **MUST NOT** include newline character '\n' in your response):
  
 {
+  "as_of_date": "<YYYY-MM-DD>",
   "sector": "<GICS sector name>",
   "momentum_score": <float between -1.0 (strong headwinds) and 1.0 (strong tailwinds)>,
   "earnings_revision_trend": "<one of: upgrades | neutral | downgrades>",
@@ -85,6 +87,7 @@ fences, no prose before or after, no <think> tokens, no preamble, no postscript.
 The JSON **MUST** match this schema exactly (you **MUST NOT** include newline character '\n' in your response):
  
 {
+  "as_of_date": "<YYYY-MM-DD>",
   "ticker": "<ticker symbol>",
   "revenue_growth_trend": "<one of: accelerating | stable | decelerating | negative>",
   "margin_trend": "<one of: expanding | stable | compressing>",

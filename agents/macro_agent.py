@@ -97,7 +97,7 @@ class MacroAgent(BaseAgent):
             user_message=user_message,
         )
 
-        return self._parse_brief(raw, macro_data)
+        return self._parse_brief(raw, macro_data, as_of_date)
 
     # ------------------------------------------------------------------
     # Helpers
@@ -143,10 +143,11 @@ class MacroAgent(BaseAgent):
         ]
         return "\n".join(parts)
 
-    def _parse_brief(self, raw: str, macro_data: dict) -> MacroBrief:
+    def _parse_brief(self, raw: str, macro_data: dict, as_of_date: str) -> MacroBrief:
         """Parse LLM response into a MacroBrief, with sensible fallbacks."""
-        fallback_data = self._heuristic_brief(macro_data)
+        fallback_data = self._heuristic_brief(macro_data, as_of_date)
         parsed = self.parse_json_response(raw, fallback_data)
+        parsed["as_of_date"] = as_of_date
 
         # Validate and coerce via Pydantic
         try:
@@ -158,7 +159,7 @@ class MacroAgent(BaseAgent):
             return MacroBrief(**fallback_data)
 
     @staticmethod
-    def _heuristic_brief(macro_data: dict) -> dict:
+    def _heuristic_brief(macro_data: dict, as_of_date: str) -> dict:
         """Derive a heuristic MacroBrief from raw signal values.
 
         Used when the LLM call fails or returns invalid JSON.
@@ -190,6 +191,7 @@ class MacroAgent(BaseAgent):
         sentiment = max(-1.0, min(1.0, -0.5 * rec_risk + 0.3 * (vix < 20)))
 
         return {
+            "as_of_date": as_of_date,
             "rate_environment": rate_env,
             "inflation_regime": inf_reg,
             "recession_risk": round(rec_risk, 3),

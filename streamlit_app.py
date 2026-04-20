@@ -331,9 +331,13 @@ def _load_agent_bundle(tickers_csv: str, _dp):
     )
 
     llm_backend = (
-        "huggingface" if bool(os.environ.get("HUGGINGFACE_MODEL")) else "claude"
+        "huggingface"
+        if bool(os.environ.get("HUGGINGFACE_MODEL"))
+        else "claude"
+        if bool(os.environ.get("ANTHROPIC_API_KEY"))
+        else None
     )
-    mock = not bool(os.environ.get("ANTHROPIC_API_KEY")) or llm_backend != "huggingface"
+    mock = not bool(os.environ.get("ANTHROPIC_API_KEY")) and not llm_backend
     ap = AgentPipeline(
         AgentConfig(
             mock_mode=mock,
@@ -344,6 +348,7 @@ def _load_agent_bundle(tickers_csv: str, _dp):
             huggingface=hf_cfg,
         ),
         cache_dir=str(_PROJECT_ROOT / "data" / "cache" / "agent_briefs"),
+        sec_user_agent=os.environ.get("SEC_USER_AGENT"),
     )
     fold = _dp.get_fold(_dp.n_folds - 1)
     return ap.run_fold(fold, sec_metadata=_dp.sec_metadata, force_refresh=True)
@@ -443,7 +448,9 @@ def _rl_metrics_to_dict(m, bm_r: np.ndarray) -> dict:
 def _build_dashboard_data(dp, last_bundle, agent_bundle, rl_results=None) -> dict:
     from data.universe import TICKER_SECTOR_MAP
 
-    tickers = dp.universe.valid_tickers
+    tickers = [
+        t for t in dp.universe.valid_tickers if t != dp.cfg.universe.benchmark_ticker
+    ]
     sectors = {t: TICKER_SECTOR_MAP.get(t, "Unknown") for t in tickers}
     prices = dp.all_prices.reindex(columns=tickers)
 
@@ -745,8 +752,10 @@ with st.sidebar:
     # ── Universe configuration ────────────────────────────────────────────
     st.markdown("**UNIVERSE**")
 
-    # default_tickers_text = ", ".join(DEFAULT_UNIVERSE)
-    default_tickers_text = "ANET, RTX"
+    from data import DEFAULT_UNIVERSE
+
+    default_tickers_text = ", ".join(DEFAULT_UNIVERSE)
+    # default_tickers_text = "ANET, RTX"
     tickers_input = st.text_area(
         "Tickers (comma-separated)",
         value=default_tickers_text,

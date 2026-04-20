@@ -63,6 +63,7 @@ class MacroBrief:
         Two to three sentence narrative synthesis.
     """
 
+    as_of_date: str
     rate_environment: str
     inflation_regime: str
     recession_risk: float
@@ -96,9 +97,10 @@ class MacroBrief:
         self.tailwinds = list(self.tailwinds)[:5]
 
     @classmethod
-    def neutral(cls) -> "MacroBrief":
+    def neutral(cls, as_of_date: str) -> "MacroBrief":
         """Return a neutral placeholder brief (used in mock mode or on failure)."""
         return cls(
+            as_of_date=as_of_date,
             rate_environment="neutral",
             inflation_regime="moderate",
             recession_risk=0.25,
@@ -112,6 +114,7 @@ class MacroBrief:
 
     def to_dict(self) -> dict:
         return {
+            "as_of_date": self.as_of_date,
             "rate_environment": self.rate_environment,
             "inflation_regime": self.inflation_regime,
             "recession_risk": self.recession_risk,
@@ -151,6 +154,7 @@ class SectorBrief:
         Two to three sentence sector narrative.
     """
 
+    as_of_date: str
     sector: str
     momentum_score: float
     earnings_revision_trend: str
@@ -173,8 +177,9 @@ class SectorBrief:
         self.risks = list(self.risks)[:3]
 
     @classmethod
-    def neutral(cls, sector: str) -> "SectorBrief":
+    def neutral(cls, as_of_date: str, sector: str) -> "SectorBrief":
         return cls(
+            as_of_date=as_of_date,
             sector=sector,
             momentum_score=0.0,
             earnings_revision_trend="neutral",
@@ -186,6 +191,7 @@ class SectorBrief:
 
     def to_dict(self) -> dict:
         return {
+            "as_of_date": self.as_of_date,
             "sector": self.sector,
             "momentum_score": self.momentum_score,
             "earnings_revision_trend": self.earnings_revision_trend,
@@ -227,6 +233,7 @@ class CompanyBrief:
         Two to three sentence company narrative.
     """
 
+    as_of_date: str
     ticker: str
     revenue_growth_trend: str
     margin_trend: str
@@ -259,8 +266,9 @@ class CompanyBrief:
         self.key_catalysts = list(self.key_catalysts)[:4]
 
     @classmethod
-    def neutral(cls, ticker: str) -> "CompanyBrief":
+    def neutral(cls, as_of_date: str, ticker: str) -> "CompanyBrief":
         return cls(
+            as_of_date=as_of_date,
             ticker=ticker,
             revenue_growth_trend="stable",
             margin_trend="stable",
@@ -274,6 +282,7 @@ class CompanyBrief:
 
     def to_dict(self) -> dict:
         return {
+            "as_of_date": self.as_of_date,
             "ticker": self.ticker,
             "revenue_growth_trend": self.revenue_growth_trend,
             "margin_trend": self.margin_trend,
@@ -344,6 +353,8 @@ class MarketBrief:
     company_briefs: dict[str, CompanyBrief] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
+        if self.macro_regime == "neutral":
+            self.macro_regime = "transitional"
         _check_choice(
             "macro_regime", self.macro_regime, ("risk_on", "risk_off", "transitional")
         )

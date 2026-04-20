@@ -393,7 +393,10 @@ def build_agent_graph(config: AgentConfig) -> object:
             return {"macro_brief": brief, "errors": []}
         except Exception as exc:
             logger.error(f"[Graph:macro_node] {exc}")
-            return {"macro_brief": MacroBrief.neutral(), "errors": [str(exc)]}
+            return {
+                "macro_brief": MacroBrief.neutral(state["as_of_date"]),
+                "errors": [str(exc)],
+            }
 
     def sector_node(state: GraphState) -> dict:
         """Run SectorAgents for all sectors and write SectorBriefs to state."""
@@ -411,7 +414,7 @@ def build_agent_graph(config: AgentConfig) -> object:
                 )
             except Exception as exc:
                 logger.warning(f"[Graph:sector_node:{sector}] {exc}")
-                results[sector] = SectorBrief.neutral(sector)
+                results[sector] = SectorBrief.neutral(as_of_date, sector)
                 errors.append(str(exc))
 
         return {"sector_briefs": results, "errors": errors}
@@ -445,7 +448,7 @@ def build_agent_graph(config: AgentConfig) -> object:
                 )
             except Exception as exc:
                 logger.warning(f"[Graph:company_node:{ticker}] {exc}")
-                results[ticker] = CompanyBrief.neutral(ticker)
+                results[ticker] = CompanyBrief.neutral(as_of_date, ticker)
                 errors.append(str(exc))
 
         return {"company_briefs": results, "errors": errors}
