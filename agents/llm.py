@@ -63,8 +63,11 @@ def patched_new(cls, data=None, requires_grad=False, has_fp16_weights=False, **k
 bnb.nn.Int8Params.__new__ = patched_new
 
 import logging
+import threading
 import time
 from abc import ABC, abstractmethod
+
+from agents.config import AgentConfig
 
 logger = logging.getLogger(__name__)
 
@@ -580,17 +583,60 @@ class HuggingFaceLLMClient(BaseLLMClient):
 # ---------------------------------------------------------------------------
 
 
-def build_llm_client(config: object) -> BaseLLMClient:
-    """Construct the appropriate LLM client from an ``AgentConfig``.
+# ---------------------------------------------------------------------------
+# LLM client registry — model weights are loaded exactly once per process
+# ---------------------------------------------------------------------------
 
-    Reads ``config.llm_backend`` to decide which concrete client to
-    instantiate.  Supported values:
+_CLIENT_REGISTRY: dict[tuple, BaseLLMClient] = {}
+_REGISTRY_LOCK = threading.Lock()
 
-    * ``"claude"``       — ``ClaudeClient`` (requires ``anthropic`` package
-                          and a valid ``ANTHROPIC_API_KEY``).
-    * ``"huggingface"``  — ``HuggingFaceLLMClient`` (requires ``transformers``
-                          and ``torch``; model weights are downloaded on first
-                          ``complete()`` call).
+
+def _client_cache_key(config: AgentConfig) -> tuple:
+    """Return a hashable key that identifies a unique client configuration.
+
+    Two ``AgentConfig`` objects that map to the same key will share a single
+    ``BaseLLMClient`` instance, so HuggingFace model weights are loaded only
+    once per process regardless of how many agent objects are instantiated.
+    """
+    backend = getattr(config, "llm_backend", "claude").lower()
+    if backend == "claude":
+        return (
+            "claude",
+            getattr(config, "anthropic_api_key", ""),
+            getattr(config, "model", ""),
+            getattr(config, "temperature", 0.0),
+            getattr(config, "max_tokens", 2048),
+            getattr(config, "enable_web_search", False),
+        )
+    if backend == "huggingface":
+        hf_cfg = getattr(config, "huggingface", None)
+        if hf_cfg is None:
+            return ("huggingface",)
+        return (
+            "huggingface",
+            getattr(hf_cfg, "model_name", ""),
+            getattr(hf_cfg, "load_in_4bit", False),
+            getattr(hf_cfg, "load_in_8bit", False),
+            getattr(hf_cfg, "torch_dtype", "auto"),
+            getattr(config, "temperature", 0.0),
+            getattr(hf_cfg, "max_new_tokens", 2048),
+        )
+    return (backend,)
+
+
+def build_llm_client(config: AgentConfig) -> BaseLLMClient:
+    """Return a shared ``BaseLLMClient`` for the given configuration.
+
+    The first call for a given configuration creates and caches the client;
+    subsequent calls with an equivalent configuration return the cached
+    instance.  This ensures that HuggingFace model weights are loaded into
+    GPU memory exactly once per process, regardless of how many agent
+    objects are created.
+
+    Supported backends (``config.llm_backend``):
+
+    * ``"claude"``       — ``ClaudeClient`` (Anthropic API)
+    * ``"huggingface"``  — ``HuggingFaceLLMClient`` (local model)
 
     Parameters
     ----------
@@ -599,7 +645,16 @@ def build_llm_client(config: object) -> BaseLLMClient:
     Returns
     -------
     BaseLLMClient
-        A concrete client instance ready to call ``complete()``.
+    """
+    key = _client_cache_key(config)
+    with _REGISTRY_LOCK:
+        if key not in _CLIENT_REGISTRY:
+            _CLIENT_REGISTRY[key] = _create_llm_client(config)
+        return _CLIENT_REGISTRY[key]
+
+
+def _create_llm_client(config: AgentConfig) -> BaseLLMClient:
+    """Internal factory — create a brand-new client, bypassing the registry.
 
     Raises
     ------

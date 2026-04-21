@@ -34,6 +34,7 @@ The shared graph state is a TypedDict. All fields use Annotated with
 import json
 import logging
 import operator
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 # TypedDict and Annotated are required by LangGraph StateGraph — no builtin equivalents exist.
 from typing import Annotated, TypedDict
@@ -378,6 +379,22 @@ def build_agent_graph(config: AgentConfig) -> object:
 
     macro_agent = MacroAgent(config)
     orch_agent = OrchestratorAgent(config)
+    # CompanyAgent is stateless between tickers; create once and share across
+    # all company_node invocations so the LLM client is not re-initialised
+    # for every quarter-end date.
+    company_agent = CompanyAgent(config)
+
+    def _max_workers(n: int) -> int:
+        """Thread-pool size for parallel agent calls.
+
+        Claude backend: API calls are I/O-bound → up to 8 concurrent threads.
+        HuggingFace backend: single-GPU inference serialises at the hardware
+        level and concurrent ``model.generate`` calls risk CUDA OOM → 1 worker.
+        Mock mode: stubs return instantly → full parallelism is harmless.
+        """
+        if config.mock_mode or config.llm_backend != "huggingface":
+            return min(n, 8)
+        return 1
 
     # ------------------------------------------------------------------
     # Node functions (shared by both LangGraph and fallback paths)
@@ -406,16 +423,24 @@ def build_agent_graph(config: AgentConfig) -> object:
         results: dict[str, SectorBrief] = {}
         errors: list[str] = []
 
-        for sector, tickers in sector_map.items():
+        def _run_sector(sector: str, tickers: list) -> tuple:
             agent = SectorAgent(config, sector=sector, tickers=tickers)
-            try:
-                results[sector] = agent.run(
-                    macro_brief=macro_brief, as_of_date=as_of_date
-                )
-            except Exception as exc:
-                logger.warning(f"[Graph:sector_node:{sector}] {exc}")
-                results[sector] = SectorBrief.neutral(as_of_date, sector)
-                errors.append(str(exc))
+            return sector, agent.run(macro_brief=macro_brief, as_of_date=as_of_date)
+
+        with ThreadPoolExecutor(max_workers=_max_workers(len(sector_map) or 1)) as pool:
+            futures = {
+                pool.submit(_run_sector, sec, tkrs): sec
+                for sec, tkrs in sector_map.items()
+            }
+            for fut in as_completed(futures):
+                sector = futures[fut]
+                try:
+                    _, brief = fut.result()
+                    results[sector] = brief
+                except Exception as exc:
+                    logger.warning(f"[Graph:sector_node:{sector}] {exc}")
+                    results[sector] = SectorBrief.neutral(as_of_date, sector)
+                    errors.append(str(exc))
 
         return {"sector_briefs": results, "errors": errors}
 
@@ -434,22 +459,27 @@ def build_agent_graph(config: AgentConfig) -> object:
             for t in tkrs:
                 ticker_sector[t] = sector
 
-        company_agent = CompanyAgent(config)
-        for ticker in tickers:
-            sector = ticker_sector.get(ticker, "")
-            sb = sector_briefs.get(sector)
-            try:
-                results[ticker] = company_agent.run(
-                    ticker=ticker,
-                    xbrl_facts=xbrl_data.get(ticker, {}),
-                    mda_text=mda_data.get(ticker, ""),
-                    sector_brief=sb,
-                    as_of_date=as_of_date,
-                )
-            except Exception as exc:
-                logger.warning(f"[Graph:company_node:{ticker}] {exc}")
-                results[ticker] = CompanyBrief.neutral(as_of_date, ticker)
-                errors.append(str(exc))
+        def _run_company(ticker: str) -> tuple:
+            sb = sector_briefs.get(ticker_sector.get(ticker, ""))
+            return ticker, company_agent.run(
+                ticker=ticker,
+                xbrl_facts=xbrl_data.get(ticker, {}),
+                mda_text=mda_data.get(ticker, ""),
+                sector_brief=sb,
+                as_of_date=as_of_date,
+            )
+
+        with ThreadPoolExecutor(max_workers=_max_workers(len(tickers) or 1)) as pool:
+            futures = {pool.submit(_run_company, t): t for t in tickers}
+            for fut in as_completed(futures):
+                ticker = futures[fut]
+                try:
+                    _, brief = fut.result()
+                    results[ticker] = brief
+                except Exception as exc:
+                    logger.warning(f"[Graph:company_node:{ticker}] {exc}")
+                    results[ticker] = CompanyBrief.neutral(as_of_date, ticker)
+                    errors.append(str(exc))
 
         return {"company_briefs": results, "errors": errors}
 
