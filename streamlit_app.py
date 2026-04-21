@@ -783,6 +783,14 @@ with st.sidebar:
     try:
         _dp = _load_data_pipeline(_tickers_csv, start_date_input)
         _pipeline_ok = True
+        if _dp.universe.start_date_adjusted:
+            st.warning(
+                f"Start date adjusted from **{start_date_input}** to "
+                f"**{_dp.universe.effective_start_date.strftime('%Y-%m-%d')}** "
+                f"so that all requested tickers are included. "
+                f"Price history for one or more tickers begins after the "
+                f"originally requested date."
+            )
     except Exception as _e:
         st.error(f"Data pipeline error: {_e}")
         _dp = None

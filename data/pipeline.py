@@ -362,10 +362,19 @@ class DataPipeline:
         self._dividends = self._dividends[valid]
         self._volumes = self._volumes[valid]
 
-        # Rebalance date schedule
+        # Rebalance date schedule — use the universe's effective start date so
+        # that all generated dates fall within the actual available price history.
+        effective_start = self._universe.effective_start_date.strftime("%Y-%m-%d")
+        if self._universe.start_date_adjusted:
+            logger.warning(
+                f"[Pipeline] Start date adjusted from "
+                f"{self.cfg.dates.start_date} to {effective_start} "
+                f"to accommodate all requested tickers. "
+                f"Downstream modules will use the adjusted date."
+            )
         end = self.cfg.dates.end_date or pd.Timestamp.today().strftime("%Y-%m-%d")
         self._rebalance_dates = get_rebalance_dates(
-            self.cfg.dates.start_date, end, self.cfg.dates.rebalance_freq
+            effective_start, end, self.cfg.dates.rebalance_freq
         )
         logger.info(
             f"[Pipeline] Universe: {self._universe.n_assets} assets, "

@@ -103,12 +103,15 @@ class Universe:
     ) -> None:
         self._raw_tickers = tickers
         self._price_data = price_data
+        self._requested_start_date = pd.Timestamp(start_date)
         self._start_date = pd.Timestamp(start_date)
         self._min_history_years = min_history_years
         self._sector_map = sector_map or TICKER_SECTOR_MAP
 
         self.valid_tickers: list[str] = []
         self.dropped_tickers: list[str] = []
+        # Set by _validate(); True when _start_date was pushed forward.
+        self.start_date_adjusted: bool = False
         self._validate()
 
     # ------------------------------------------------------------------
@@ -116,44 +119,64 @@ class Universe:
     # ------------------------------------------------------------------
 
     def _validate(self) -> None:
-        """Filter tickers that do not meet minimum history requirements."""
-        min_days = int(self._min_history_years * 252)
+        """Determine the effective start date and filter tickers.
 
+        Rather than dropping tickers whose price history begins after the
+        requested start date, the effective start date is advanced to the
+        latest first-available date among all tickers that are present in
+        ``price_data``.  Tickers that are entirely absent from ``price_data``
+        are still dropped.  After the effective start date is determined, any
+        ticker that still does not meet the minimum observation count is
+        dropped.
+        """
+        # ── Pass 1: find the latest first-available date across all tickers ──
+        present: list[str] = []
         for ticker in self._raw_tickers:
             if ticker not in self._price_data.columns:
                 logger.warning(
                     f"[Universe] {ticker}: not found in price data — dropped."
                 )
                 self.dropped_tickers.append(ticker)
-                continue
+            else:
+                present.append(ticker)
 
+        if present:
+            first_dates = [
+                self._price_data[t].dropna().index[0]
+                for t in present
+                if not self._price_data[t].dropna().empty
+            ]
+            if first_dates:
+                latest_first = max(first_dates)
+                if latest_first > self._start_date:
+                    logger.warning(
+                        f"[Universe] Start date adjusted from "
+                        f"{self._start_date.date()} to {latest_first.date()} "
+                        f"to accommodate all requested tickers."
+                    )
+                    self._start_date = latest_first
+                    self.start_date_adjusted = True
+
+        # ── Pass 2: apply minimum-history filter with the effective start date ──
+        min_days = int(self._min_history_years * 252)
+
+        for ticker in present:
             series = self._price_data[ticker].dropna()
-
-            # Must have data starting on or before start_date
-            if series.empty or series.index[0] > self._start_date:
-                logger.warning(
-                    f"[Universe] {ticker}: history starts {series.index[0].date()} "
-                    f"(required <= {self._start_date.date()}) — dropped."
-                )
-                self.dropped_tickers.append(ticker)
-                continue
-
-            # Must meet minimum observation count
             obs_from_start = series[series.index >= self._start_date]
             if len(obs_from_start) < min_days:
                 logger.warning(
                     f"[Universe] {ticker}: only {len(obs_from_start)} observations "
-                    f"(required >= {min_days}) — dropped."
+                    f"from {self._start_date.date()} (required >= {min_days}) — dropped."
                 )
                 self.dropped_tickers.append(ticker)
                 continue
-
             self.valid_tickers.append(ticker)
 
         logger.info(
             f"[Universe] {len(self.valid_tickers)} valid / "
             f"{len(self.dropped_tickers)} dropped out of "
-            f"{len(self._raw_tickers)} candidates."
+            f"{len(self._raw_tickers)} candidates. "
+            f"Effective start: {self._start_date.date()}."
         )
 
     # ------------------------------------------------------------------
@@ -164,6 +187,16 @@ class Universe:
     def n_assets(self) -> int:
         """Number of validated assets."""
         return len(self.valid_tickers)
+
+    @property
+    def effective_start_date(self) -> pd.Timestamp:
+        """The start date actually used for filtering (may differ from requested)."""
+        return self._start_date
+
+    @property
+    def requested_start_date(self) -> pd.Timestamp:
+        """The start date originally requested by the caller."""
+        return self._requested_start_date
 
     @property
     def prices(self) -> pd.DataFrame:
@@ -256,7 +289,9 @@ class Universe:
             "dropped_tickers": self.dropped_tickers,
             "sectors": self.sectors.to_dict(),
             "n_assets": self.n_assets,
-            "start_date": str(self._start_date.date()),
+            "requested_start_date": str(self._requested_start_date.date()),
+            "effective_start_date": str(self._start_date.date()),
+            "start_date_adjusted": self.start_date_adjusted,
             "min_history_years": self._min_history_years,
         }
 
