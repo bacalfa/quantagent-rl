@@ -755,7 +755,7 @@ with st.sidebar:
     from data import DEFAULT_UNIVERSE
 
     default_tickers_text = ", ".join(DEFAULT_UNIVERSE)
-    # default_tickers_text = "ANET, RTX"
+    # default_tickers_text = "ANET, CRWD, GEV, JPM, PLTR, STRL, VRT"
     tickers_input = st.text_area(
         "Tickers (comma-separated)",
         value=default_tickers_text,

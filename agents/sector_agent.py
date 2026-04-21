@@ -164,6 +164,8 @@ class SectorAgent(BaseAgent):
         # Ensure sector field is always correct
         parsed["as_of_date"] = as_of_date
         parsed["sector"] = self.sector
+        if "constituent_tickers" in parsed:
+            del parsed["constituent_tickers"]
 
         try:
             return SectorBrief(**parsed)
