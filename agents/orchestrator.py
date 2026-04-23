@@ -5,25 +5,28 @@ OrchestratorAgent and LangGraph StateGraph for QuantAgent-RL.
 
 Graph Topology
 --------------
-The LangGraph ``StateGraph`` wires four agent nodes with macro and sector
-running in parallel before the company and orchestrator nodes:
+The LangGraph ``StateGraph`` wires four agent nodes sequentially. The sector
+node runs *after* the macro node because it consumes the ``MacroBrief``
+produced by the macro node as context:
 
-    START ──────────────────────────────────────────────────┐
-           │                                                │
-    [macro_node]                                  [sector_node_*]
-           │                                                │
-           └──────────────── company_node ──────────────────┘
-                                  │
-                           orchestrator_node
-                                  │
-                                END
+    START
+      │
+  [macro_node]
+      │  (macro_brief available)
+  [sector_node_*]
+      │  (sector_briefs available)
+  [company_node]
+      │
+  [orchestrator_node]
+      │
+     END
 
-Parallel Execution
-------------------
-LangGraph handles parallelism automatically: when both ``macro_node`` and
-``sector_node`` have edges pointing to ``company_node``, LangGraph executes
-the predecessors concurrently (using asyncio) and waits for both to complete
-before advancing to the company step.
+Intra-node Parallelism
+----------------------
+Within ``sector_node``, all GICS sector agents are dispatched concurrently
+via ``ThreadPoolExecutor`` (the macro brief is already available at this
+point). Within ``company_node``, all per-ticker company agents are similarly
+dispatched concurrently.
 
 State Schema
 ------------
@@ -356,8 +359,10 @@ def build_agent_graph(config: AgentConfig) -> object:
     """Build and compile the LangGraph StateGraph for the agent pipeline.
 
     When ``langgraph`` is installed, returns a compiled LangGraph graph that
-    runs macro and sector agents in parallel before the company and
-    orchestrator nodes.
+    runs four nodes sequentially: macro → sector → company → orchestrator.
+    Sector agents consume the MacroBrief produced by the macro node, so they
+    must run after it. Intra-node parallelism (multiple sector/company agents
+    within a single node) is implemented via ``ThreadPoolExecutor``.
 
     When ``langgraph`` is not installed, returns a ``_SequentialGraph``
     fallback that runs the same four nodes sequentially with the same
@@ -504,7 +509,7 @@ def build_agent_graph(config: AgentConfig) -> object:
     nodes = [macro_node, sector_node, company_node, orchestrator_node]
 
     # ------------------------------------------------------------------
-    # LangGraph path (preferred — macro + sector run in parallel)
+    # LangGraph path (preferred — macro → sector → company → orchestrator)
     # ------------------------------------------------------------------
     try:
         from langgraph.graph import END, START, StateGraph
@@ -515,7 +520,7 @@ def build_agent_graph(config: AgentConfig) -> object:
         graph.add_node("company_node", company_node)
         graph.add_node("orchestrator_node", orchestrator_node)
 
-        # START fans out to macro and sector simultaneously
+        # Sector node runs after macro node (uses macro_brief as input)
         graph.add_edge(START, "macro_node")
         # graph.add_edge(START, "sector_node")
         # # Both must finish before company node starts
@@ -526,14 +531,15 @@ def build_agent_graph(config: AgentConfig) -> object:
         graph.add_edge("orchestrator_node", END)
 
         logger.info(
-            "[build_agent_graph] Using LangGraph StateGraph (parallel execution)."
+            "[build_agent_graph] Using LangGraph StateGraph "
+            "(macro → sector → company → orchestrator)."
         )
         return graph.compile()
 
     except ImportError:
         logger.info(
             "[build_agent_graph] langgraph not installed — using sequential fallback. "
-            "Install for parallel macro+sector execution: pip install langgraph"
+            "Install to use LangGraph StateGraph: pip install langgraph"
         )
 
     # ------------------------------------------------------------------
