@@ -506,7 +506,7 @@ def build_agent_graph(config: AgentConfig) -> object:
                 "errors": [str(exc)],
             }
 
-    nodes = [macro_node, sector_node, company_node, orchestrator_node]
+    nodes = [macro_node, sector_node, company_node, orchestrator_node]  # noqa: F841  # TODO: appears unused; verify whether the fallback path below needs it
 
     # ------------------------------------------------------------------
     # LangGraph path (preferred — macro → sector → company → orchestrator)

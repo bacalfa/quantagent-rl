@@ -385,13 +385,13 @@ class FamaFrenchFactors:
         excess, factors = self._align_factors(log_returns, end_date=end_date)
 
         W = self.cfg.rolling_window
-        T = len(excess)
-        N = len(excess.columns)
-        K = len(self._factor_names)
+        T = len(excess)  # noqa: F841  # TODO: unused; drop if rolling regression no longer needs panel dims
+        N = len(excess.columns)  # noqa: F841  # TODO: unused; drop if rolling regression no longer needs panel dims
+        K = len(self._factor_names)  # noqa: F841  # TODO: unused; drop if rolling regression no longer needs panel dims
         min_obs = int(W * self.cfg.min_obs_fraction)
 
         tickers = list(excess.columns)
-        factor_cols = (
+        factor_cols = (  # noqa: F841  # TODO: assigned but never returned — check whether output schema should include this
             ["alpha_ann"]
             + [f"beta_{f.replace('_rf', '')}" for f in self._factor_names]
             + ["r_squared"]

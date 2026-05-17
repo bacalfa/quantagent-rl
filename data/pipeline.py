@@ -406,7 +406,7 @@ class DataPipeline:
                 columns={self._prices.columns[0]: "benchmark"}
             )
             asset_prices = self._prices
-            asset_dividends = self._dividends
+            asset_dividends = self._dividends  # noqa: F841  # TODO: not passed to FeatureEngineer below — drop or wire through
             asset_volumes = self._volumes
 
         fc = self.cfg.features

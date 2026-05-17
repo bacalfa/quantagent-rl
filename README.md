@@ -1,5 +1,7 @@
 # QuantAgent-RL
 
+[![CI](https://github.com/bacalfa/quantagent-rl/actions/workflows/ci.yml/badge.svg)](https://github.com/bacalfa/quantagent-rl/actions/workflows/ci.yml)
+
 **Tax-Aware Portfolio Rebalancing via Multi-Agent LLM Analysis and Reinforcement Learning**
 
 A production-grade, end-to-end system that combines GPU-accelerated quantitative finance, agentic AI (LangGraph orchestration), and reinforcement learning to produce quarterly portfolio rebalancing decisions that maximize risk-adjusted returns while managing tax exposure.
@@ -121,6 +123,25 @@ SEC_USER_AGENT=First Name Last Name username@email.com
 # HuggingFace user access token
 HF_TOKEN=hf_**********************************
 ```
+
+---
+
+## Continuous Integration
+
+GitHub Actions runs on every push and PR to `main`:
+
+- **Lint** — `ruff check` against the rules configured in `pyproject.toml`
+- **Test** — `pytest` on Python 3.12
+
+Run the same checks locally before pushing:
+
+```shell
+uv sync --group dev
+uv run ruff check .
+uv run pytest
+```
+
+Add new tests under `tests/`. If a test needs the full project dependencies (torch, vectorbt, stable-baselines3, etc.), update the `Install dev dependencies` step in [.github/workflows/ci.yml](.github/workflows/ci.yml) to use `uv sync --group dev` instead of `--only-group dev`.
 
 ---
 

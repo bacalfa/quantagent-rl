@@ -44,3 +44,42 @@ dependencies = [
     "vectorbt>=0.26",
     "yfinance>=0.2.50",
 ]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0",
+    "pytest-cov>=5.0",
+    "ruff>=0.6",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+extend-exclude = [
+    ".venv",
+    "__pycache__",
+    "*.ipynb",
+    "scratch.py",
+]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I"]
+ignore = [
+    "E501",  # line too long — handled by formatter, often unavoidable in research code
+    "E741",  # ambiguous variable name (e.g. l, I) — common in math/finance notation
+]
+
+[tool.ruff.lint.per-file-ignores]
+# These files intentionally monkey-patch a library before later imports.
+"agents/llm.py" = ["E402"]
+"streamlit_app.py" = ["E402"]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+
+[tool.pytest.ini_options]
+minversion = "8.0"
+testpaths = ["tests"]
+addopts = "-ra --strict-markers"
+
