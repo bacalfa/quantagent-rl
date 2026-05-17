@@ -5,8 +5,6 @@ dependencies (torch, vectorbt, stable-baselines3) so CI stays fast.
 Add module-level tests under tests/ as the project grows.
 """
 
-from __future__ import annotations
-
 import sys
 import tomllib
 from pathlib import Path
